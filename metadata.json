@@ -1,0 +1,6 @@
+{
+  "name": "LunaMatch",
+  "description": "Multi-modal, Sun angle and scale invariant image correspondence engine for Chandrayaan-2 optical images (OHRC, TMC-2, and IIRS) with physics-informed illumination invariance, multi-scale learned matching, geometric priors, and sub-pixel refinement.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
