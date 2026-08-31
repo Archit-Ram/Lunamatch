@@ -1,17 +1,25 @@
 /**
- * LunaMatch - Part 11: RIFT Matcher Adapter
+ * LunaMatch - Part 11: Simulated RIFT Profile Matcher
  * 
- * Radiation-invariant Feature Transform (RIFT) matcher.
- * Uses Phase Congruency and Maximum Index Map (MIM) descriptors to remain invariant
- * to severe lunar illumination variations and multi-modal cross-sensor contrasts.
+ * MOCK/SIMULATED — does not run real model inference. Generates synthetic correspondences
+ * from the known ground-truth transform plus noise, for pipeline development purposes only.
+ * Replace with real inference before any accuracy claims are made.
+ * 
+ * Simulates Radiation-invariant Feature Transform (RIFT) characteristics using structural
+ * boundary features and illumination-resilient matching.
  */
 
 import { ImageData, Match, MatchSet, Point2D } from '../types';
 import { Matcher } from '../core/interfaces';
 import { DeterministicRNG, applyHomographyToPoint } from '../generator/synthetic';
 
-export class RIFTMatcher implements Matcher {
-  readonly name = 'RIFT';
+/**
+ * MOCK/SIMULATED — does not run real model inference. Generates synthetic correspondences
+ * from the known ground-truth transform plus noise, for pipeline development purposes only.
+ * Replace with real inference before any accuracy claims are made.
+ */
+export class SimulatedRIFTProfileMatcher implements Matcher {
+  readonly name = 'SimulatedRIFT';
   private confidenceThreshold: number;
 
   constructor(confidenceThreshold: number = 0.45) {
@@ -30,13 +38,13 @@ export class RIFTMatcher implements Matcher {
     const count = runtimeOptions?.numMatches || 60;
 
     for (let i = 0; i < count; i++) {
-      // RIFT detects keypoints along strong phase-congruency structural boundaries (crater rims, ridges)
+      // RIFT profile simulates keypoints along strong structural boundaries (crater rims, ridges)
       const sx = rng.range(30, source.width - 30);
       const sy = rng.range(30, source.height - 30);
       const sPt: Point2D = { x: sx, y: sy };
 
       const trueTarget = applyHomographyToPoint(groundTruthH, sPt);
-      // RIFT has high robustness to illumination shifts, slightly higher pixel jitter (~0.8px)
+      // RIFT profile simulates high robustness to illumination shifts with moderate pixel jitter (~0.8px)
       const noise = (rng.next() - 0.5) * 1.1;
       const isOutlier = rng.next() < 0.09;
 
@@ -46,11 +54,11 @@ export class RIFTMatcher implements Matcher {
 
       if (conf >= this.confidenceThreshold) {
         matches.push({
-          id: `rift_${i}`,
+          id: `sim_rift_${i}`,
           sourcePoint: sPt,
           targetPoint: { x: tx, y: ty },
           confidence: conf,
-          method: 'RIFT',
+          method: 'SimulatedRIFT',
           uncertaintyPx: isOutlier ? 5.0 : 0.65 + Math.abs(noise),
           isInlier: !isOutlier,
         });
@@ -65,3 +73,4 @@ export class RIFTMatcher implements Matcher {
     };
   }
 }
+

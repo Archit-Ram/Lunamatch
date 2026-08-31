@@ -1,16 +1,24 @@
 /**
- * LunaMatch - Part 10: LoFTR Matcher Adapter
+ * LunaMatch - Part 10: Simulated LoFTR Profile Matcher
  * 
- * Dense learned transformer matcher adapter implementing the standard Matcher protocol.
- * Simulates coarse-to-fine self- and cross-attention feature correlation on lunar surface.
+ * MOCK/SIMULATED — does not run real model inference. Generates synthetic correspondences
+ * from the known ground-truth transform plus noise, for pipeline development purposes only.
+ * Replace with real inference before any accuracy claims are made.
+ * 
+ * Simulates coarse-to-fine self- and cross-attention feature correlation characteristics.
  */
 
 import { ImageData, Match, MatchSet, Point2D } from '../types';
 import { Matcher } from '../core/interfaces';
 import { DeterministicRNG, applyHomographyToPoint } from '../generator/synthetic';
 
-export class LoFTRMatcher implements Matcher {
-  readonly name = 'LoFTR';
+/**
+ * MOCK/SIMULATED — does not run real model inference. Generates synthetic correspondences
+ * from the known ground-truth transform plus noise, for pipeline development purposes only.
+ * Replace with real inference before any accuracy claims are made.
+ */
+export class SimulatedLoFTRProfileMatcher implements Matcher {
+  readonly name = 'SimulatedLoFTR';
   private confidenceThreshold: number;
 
   constructor(confidenceThreshold: number = 0.5) {
@@ -34,7 +42,7 @@ export class LoFTRMatcher implements Matcher {
       const sPt: Point2D = { x: sx, y: sy };
 
       const trueTarget = applyHomographyToPoint(groundTruthH, sPt);
-      // LoFTR has high dense coverage, fine sub-pixel accuracy (~0.4px noise)
+      // LoFTR profile simulates high dense coverage, fine sub-pixel accuracy (~0.4px noise)
       const noise = (rng.next() - 0.5) * 0.7;
       const isOutlier = rng.next() < 0.06;
 
@@ -44,11 +52,11 @@ export class LoFTRMatcher implements Matcher {
 
       if (conf >= this.confidenceThreshold) {
         matches.push({
-          id: `loftr_${i}`,
+          id: `sim_loftr_${i}`,
           sourcePoint: sPt,
           targetPoint: { x: tx, y: ty },
           confidence: conf,
-          method: 'LoFTR',
+          method: 'SimulatedLoFTR',
           uncertaintyPx: isOutlier ? 4.5 : 0.35 + Math.abs(noise),
           isInlier: !isOutlier,
         });
@@ -63,3 +71,4 @@ export class LoFTRMatcher implements Matcher {
     };
   }
 }
+

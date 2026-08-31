@@ -208,7 +208,7 @@ export async function runAllLunaMatchUnitTests(): Promise<TestCaseResult[]> {
           sourcePoint: { x: 180, y: 180 },
           targetPoint: { x: 180.35, y: 179.72 },
           confidence: 0.9,
-          method: 'LoFTR' as const,
+          method: 'SimulatedLoFTR' as const,
           isInlier: true,
         },
       ],

@@ -168,19 +168,22 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="p-3 bg-slate-950/80 rounded-lg border border-slate-800 space-y-2.5">
           <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block flex items-center justify-between">
             <span>Correspondence Engine</span>
-            <span className="text-[10px] text-emerald-400 font-mono">Part 09-13</span>
+            <span className="text-[10px] text-amber-400 font-mono font-semibold">Simulated Profiles</span>
           </label>
           <select
             value={matcherChoice}
             onChange={(e) => setMatcherChoice(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 font-semibold focus:outline-none focus:border-cyan-500"
+            className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 font-semibold focus:outline-none focus:border-cyan-500 text-xs"
           >
-            <option value="fusion">LunaMatch Fusion (LoFTR + RIFT + LightGlue)</option>
-            <option value="loftr">LoFTR (Learned Dense Transformer)</option>
-            <option value="rift">RIFT (Radiation Invariant Phase)</option>
-            <option value="lightglue">SuperPoint + LightGlue (Sparse Keypoint)</option>
-            <option value="mock">MockMatcher (Controlled Benchmark Mode)</option>
+            <option value="fusion">LunaMatch Multi-Profile Fusion (Simulated LoFTR + RIFT + LightGlue)</option>
+            <option value="loftr">LoFTR Profile (Simulated — no real model weights loaded)</option>
+            <option value="rift">RIFT Profile (Simulated — phase boundary synthetic noise)</option>
+            <option value="lightglue">SuperPoint + LightGlue Profile (Simulated — sparse synthetic noise)</option>
+            <option value="mock">MockMatcher (Simulated Benchmark Control Mode)</option>
           </select>
+          <div className="text-[10px] text-amber-400/90 leading-tight bg-amber-950/40 p-1.5 rounded border border-amber-800/40">
+            ⚠️ Note: Matchers run simulated synthetic profiles for architectural verification (no offline neural weights packaged).
+          </div>
 
           {matcherChoice === 'mock' && (
             <div className="pt-1.5 border-t border-slate-800/80">

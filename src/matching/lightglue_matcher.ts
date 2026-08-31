@@ -1,16 +1,25 @@
 /**
- * LunaMatch - Part 12: SuperPoint + LightGlue Matcher Adapter
+ * LunaMatch - Part 12: Simulated SuperPoint + LightGlue Profile Matcher
  * 
- * Sparse keypoint detector (SuperPoint) coupled with deep adaptive graph neural
- * network correspondence pruning (LightGlue).
+ * MOCK/SIMULATED — does not run real model inference. Generates synthetic correspondences
+ * from the known ground-truth transform plus noise, for pipeline development purposes only.
+ * Replace with real inference before any accuracy claims are made.
+ * 
+ * Simulates sparse keypoint detector (SuperPoint) coupled with adaptive graph neural
+ * network correspondence characteristics (LightGlue).
  */
 
 import { ImageData, Match, MatchSet, Point2D } from '../types';
 import { Matcher } from '../core/interfaces';
 import { DeterministicRNG, applyHomographyToPoint } from '../generator/synthetic';
 
-export class LightGlueMatcher implements Matcher {
-  readonly name = 'LightGlue';
+/**
+ * MOCK/SIMULATED — does not run real model inference. Generates synthetic correspondences
+ * from the known ground-truth transform plus noise, for pipeline development purposes only.
+ * Replace with real inference before any accuracy claims are made.
+ */
+export class SimulatedLightGlueProfileMatcher implements Matcher {
+  readonly name = 'SimulatedLightGlue';
   private confidenceThreshold: number;
 
   constructor(confidenceThreshold: number = 0.5) {
@@ -29,7 +38,7 @@ export class LightGlueMatcher implements Matcher {
     const count = runtimeOptions?.numMatches || 48;
 
     for (let i = 0; i < count; i++) {
-      // SuperPoint keypoints placed at corner-like lunar terrain peaks and crater vertices
+      // SuperPoint keypoints profile placed at corner-like lunar terrain peaks and crater vertices
       const sx = rng.range(35, source.width - 35);
       const sy = rng.range(35, source.height - 35);
       const sPt: Point2D = { x: sx, y: sy };
@@ -44,11 +53,11 @@ export class LightGlueMatcher implements Matcher {
 
       if (conf >= this.confidenceThreshold) {
         matches.push({
-          id: `lightglue_${i}`,
+          id: `sim_lightglue_${i}`,
           sourcePoint: sPt,
           targetPoint: { x: tx, y: ty },
           confidence: conf,
-          method: 'LightGlue',
+          method: 'SimulatedLightGlue',
           uncertaintyPx: isOutlier ? 4.0 : 0.4 + Math.abs(noise),
           isInlier: !isOutlier,
         });
@@ -63,3 +72,4 @@ export class LightGlueMatcher implements Matcher {
     };
   }
 }
+

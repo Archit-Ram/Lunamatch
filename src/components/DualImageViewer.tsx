@@ -302,6 +302,10 @@ export const DualImageViewer: React.FC<DualImageViewerProps> = ({
 
         {/* Inlier Filter Toggle & Zoom */}
         <div className="flex items-center gap-3">
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 border border-amber-500/50 text-amber-300">
+            SIMULATED PROFILE
+          </span>
+
           <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-300">
             <input
               type="checkbox"
@@ -384,7 +388,7 @@ export const DualImageViewer: React.FC<DualImageViewerProps> = ({
                 <span className="text-amber-300 font-semibold">{hoveredMatch.uncertaintyPx?.toFixed(2) || '0.35'} px</span>
               </div>
               <div className="col-span-2 text-slate-400 text-[10px] pt-1 border-t border-slate-800/80">
-                Provenance: {hoveredMatch.method} {hoveredMatch.methodProvenance ? `(LoFTR: ${(hoveredMatch.methodProvenance.loftrConfidence || 0).toFixed(2)}, RIFT: ${(hoveredMatch.methodProvenance.riftConfidence || 0).toFixed(2)})` : ''}
+                Provenance: {hoveredMatch.method} (Simulated Profile) {hoveredMatch.methodProvenance ? `• Fusion: [LoFTR: ${(hoveredMatch.methodProvenance.loftrConfidence || 0).toFixed(2)}, RIFT: ${(hoveredMatch.methodProvenance.riftConfidence || 0).toFixed(2)}]` : ''}
               </div>
             </div>
           </div>

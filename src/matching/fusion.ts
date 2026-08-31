@@ -111,13 +111,13 @@ export class MatchFusionEngine {
         sumTgtY += m.targetPoint.y * w;
         totalWeight += w;
 
-        if (m.method === 'LoFTR') {
+        if (m.method === 'SimulatedLoFTR' || (m.method as string) === 'LoFTR') {
           loftrConf = Math.max(loftrConf, m.confidence);
           agreeingMethodsCount++;
-        } else if (m.method === 'RIFT') {
+        } else if (m.method === 'SimulatedRIFT' || (m.method as string) === 'RIFT') {
           riftConf = Math.max(riftConf, m.confidence);
           agreeingMethodsCount++;
-        } else if (m.method === 'LightGlue') {
+        } else if (m.method === 'SimulatedLightGlue' || (m.method as string) === 'LightGlue') {
           lightglueConf = Math.max(lightglueConf, m.confidence);
           agreeingMethodsCount++;
         } else {

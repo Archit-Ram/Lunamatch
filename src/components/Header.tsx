@@ -48,10 +48,11 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 text-xs text-slate-300 mr-1">
-          <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+        <div className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1 rounded-md border border-amber-500/40 text-xs text-slate-300 mr-1">
+          <Cpu className="w-3.5 h-3.5 text-amber-400" />
           <span className="text-slate-400">Matcher:</span>
-          <span className="font-mono font-semibold text-cyan-300 capitalize">{activeMatcher}</span>
+          <span className="font-mono font-semibold text-amber-300 capitalize">{activeMatcher}</span>
+          <span className="text-[10px] bg-amber-950 px-1 py-0.2 rounded text-amber-400 border border-amber-700/50">Simulated</span>
         </div>
 
         <button

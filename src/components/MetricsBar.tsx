@@ -46,16 +46,20 @@ export const MetricsBar: React.FC<MetricsBarProps> = ({
               <span>REGISTRATION FAILED: {failureReason || 'INSUFFICIENT_CONSISTENCY'}</span>
             </div>
           ) : (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-950/80 border border-emerald-800/60 rounded text-xs font-semibold text-emerald-400">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                 <span>ALIGNED: {sourceSensor} ↔ {referenceSensor}</span>
               </div>
               {isSubpixel && (
                 <span className="text-[11px] font-bold px-2 py-0.5 bg-cyan-950 border border-cyan-700/50 text-cyan-300 rounded">
-                  SUB-PIXEL ACCURACY ACHIEVED
+                  SUB-PIXEL ACCURACY
                 </span>
               )}
+              <span className="text-[10px] font-mono font-semibold px-2 py-0.5 bg-amber-950/90 border border-amber-500/60 text-amber-300 rounded flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+                SIMULATED PROFILE (No neural weights loaded)
+              </span>
             </div>
           )}
         </div>
