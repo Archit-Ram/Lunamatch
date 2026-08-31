@@ -124,6 +124,20 @@ export function nextPowerOf2(n: number): number {
   return p;
 }
 
+/**
+ * Maps coordinate to valid index within [0, len - 1] via symmetric whole-point reflection.
+ * Used for mirror-padding non-power-of-2 image boundaries to prevent Gibbs ringing.
+ */
+export function reflectCoord(val: number, len: number): number {
+  if (len <= 1) return 0;
+  const period = 2 * (len - 1);
+  let rem = Math.abs(val) % period;
+  if (rem >= len) {
+    rem = period - rem;
+  }
+  return rem;
+}
+
 export interface RIFTFeatureMaps {
   phaseCongruencyMoments: Float64Array;
   mimMap: Uint8Array;
@@ -149,12 +163,21 @@ export function computeRIFTFeatureMaps(
   const N = nextPowerOf2(Math.max(origW, origH));
   const ws = new FFTWorkspace(N);
 
-  // Prepare padded spatial real image
+  // Prepare spatial real image with symmetric reflection (mirror) padding to FFT size N x N.
+  // Justification: In frequency-domain Log-Gabor / Phase Congruency filtering (Kovesi / Li et al.),
+  // zero-padding non-power-of-2 images introduces sharp step discontinuities at image boundaries.
+  // This causes severe Gibbs spectral leakage / ringing artifacts that manifest as spurious false
+  // keypoints across flat lunar terrain (e.g., mare plains). Symmetric mirror reflection preserves C0
+  // boundary continuity and completely suppresses ringing without altering internal frequency responses.
   const imgReal = new Float64Array(N * N);
   const imgImag = new Float64Array(N * N);
-  for (let y = 0; y < origH; y++) {
-    for (let x = 0; x < origW; x++) {
-      imgReal[y * N + x] = pixels[y * origW + x];
+  for (let y = 0; y < N; y++) {
+    const srcY = y < origH ? y : reflectCoord(y, origH);
+    const rowOffset = srcY * origW;
+    const nRowOffset = y * N;
+    for (let x = 0; x < N; x++) {
+      const srcX = x < origW ? x : reflectCoord(x, origW);
+      imgReal[nRowOffset + x] = pixels[rowOffset + srcX];
     }
   }
 

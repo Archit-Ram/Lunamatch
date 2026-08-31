@@ -23,7 +23,7 @@ import { MockGeometryProvider } from '../geometry/lunar';
 import { MockMatcher } from '../matching/mock_matcher';
 import { SimulatedLoFTRProfileMatcher } from '../matching/loftr_matcher';
 import { RIFTMatcher } from '../matching/rift_matcher';
-import { SimulatedLightGlueProfileMatcher } from '../matching/lightglue_matcher';
+import { LightGlueMatcher } from '../matching/lightglue_matcher';
 import { MatchFusionEngine } from '../matching/fusion';
 import { GeometricGraphFilter } from '../filtering/graph_consistency';
 import { AdaptiveTransformEstimator } from '../registration/adaptive_transform';
@@ -40,7 +40,7 @@ export class LunaMatchPipeline {
   private geometryProvider: MockGeometryProvider;
   private loftrMatcher: SimulatedLoFTRProfileMatcher;
   private riftMatcher: RIFTMatcher;
-  private lightglueMatcher: SimulatedLightGlueProfileMatcher;
+  private lightglueMatcher: LightGlueMatcher;
   private mockMatcher: MockMatcher;
   private fusionEngine: MatchFusionEngine;
   private geometricFilter: GeometricGraphFilter;
@@ -55,7 +55,7 @@ export class LunaMatchPipeline {
     this.geometryProvider = new MockGeometryProvider();
     this.loftrMatcher = new SimulatedLoFTRProfileMatcher();
     this.riftMatcher = new RIFTMatcher();
-    this.lightglueMatcher = new SimulatedLightGlueProfileMatcher();
+    this.lightglueMatcher = new LightGlueMatcher();
     this.mockMatcher = new MockMatcher({ mode: this.config.mockMode || 'low_noise' });
     this.fusionEngine = new MatchFusionEngine({ weights: this.config.fusionWeights });
     this.geometricFilter = new GeometricGraphFilter(this.config.ransac);
@@ -130,9 +130,20 @@ export class LunaMatchPipeline {
     let fusedMatchSet: MatchSet;
 
     if (matcherChoice === 'fusion') {
-      const matchSetLoFTR = this.loftrMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
-      const matchSetRIFT = this.riftMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
-      const matchSetLG = this.lightglueMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      const matchSetLoFTR = await this.loftrMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      const matchSetRIFT = await this.riftMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      let matchSetLG: MatchSet;
+      try {
+        matchSetLG = await this.lightglueMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      } catch (err: any) {
+        warnings.push(`LightGlue matcher skipped: ${err.message}`);
+        matchSetLG = {
+          matches: [],
+          sourceImageId: sourceImage.id,
+          targetImageId: referenceImage.id,
+          coordinateConvention: 'x=column, y=row',
+        };
+      }
 
       timing.matching = performance.now() - t3;
 
@@ -147,22 +158,32 @@ export class LunaMatchPipeline {
       };
       timing.fusion = performance.now() - t4;
     } else if (matcherChoice === 'loftr') {
-      rawMatchSet = this.loftrMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      rawMatchSet = await this.loftrMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
     } else if (matcherChoice === 'rift') {
-      rawMatchSet = this.riftMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      rawMatchSet = await this.riftMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
     } else if (matcherChoice === 'lightglue') {
-      rawMatchSet = this.lightglueMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      try {
+        rawMatchSet = await this.lightglueMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      } catch (err: any) {
+        warnings.push(`LightGlue error: ${err.message}`);
+        rawMatchSet = {
+          matches: [],
+          sourceImageId: sourceImage.id,
+          targetImageId: referenceImage.id,
+          coordinateConvention: 'x=column, y=row',
+        };
+      }
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
     } else {
       // Mock Matcher with selected mode
       const mMode = overrideOptions?.mockMode || this.config.mockMode || 'low_noise';
       this.mockMatcher = new MockMatcher({ mode: mMode });
-      rawMatchSet = this.mockMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix, mode: mMode });
+      rawMatchSet = await this.mockMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix, mode: mMode });
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
     }
