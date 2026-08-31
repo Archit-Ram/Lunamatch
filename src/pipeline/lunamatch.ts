@@ -22,7 +22,7 @@ import { ImagePyramidBuilder } from '../pyramids/multiscale';
 import { MockGeometryProvider } from '../geometry/lunar';
 import { MockMatcher } from '../matching/mock_matcher';
 import { SimulatedLoFTRProfileMatcher } from '../matching/loftr_matcher';
-import { SimulatedRIFTProfileMatcher } from '../matching/rift_matcher';
+import { RIFTMatcher } from '../matching/rift_matcher';
 import { SimulatedLightGlueProfileMatcher } from '../matching/lightglue_matcher';
 import { MatchFusionEngine } from '../matching/fusion';
 import { GeometricGraphFilter } from '../filtering/graph_consistency';
@@ -39,7 +39,7 @@ export class LunaMatchPipeline {
   private illuminationNormalizer: IlluminationInvariantNormalizer;
   private geometryProvider: MockGeometryProvider;
   private loftrMatcher: SimulatedLoFTRProfileMatcher;
-  private riftMatcher: SimulatedRIFTProfileMatcher;
+  private riftMatcher: RIFTMatcher;
   private lightglueMatcher: SimulatedLightGlueProfileMatcher;
   private mockMatcher: MockMatcher;
   private fusionEngine: MatchFusionEngine;
@@ -54,7 +54,7 @@ export class LunaMatchPipeline {
     this.illuminationNormalizer = new IlluminationInvariantNormalizer();
     this.geometryProvider = new MockGeometryProvider();
     this.loftrMatcher = new SimulatedLoFTRProfileMatcher();
-    this.riftMatcher = new SimulatedRIFTProfileMatcher();
+    this.riftMatcher = new RIFTMatcher();
     this.lightglueMatcher = new SimulatedLightGlueProfileMatcher();
     this.mockMatcher = new MockMatcher({ mode: this.config.mockMode || 'low_noise' });
     this.fusionEngine = new MatchFusionEngine({ weights: this.config.fusionWeights });

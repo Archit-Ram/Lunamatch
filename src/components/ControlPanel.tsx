@@ -168,21 +168,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="p-3 bg-slate-950/80 rounded-lg border border-slate-800 space-y-2.5">
           <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block flex items-center justify-between">
             <span>Correspondence Engine</span>
-            <span className="text-[10px] text-amber-400 font-mono font-semibold">Simulated Profiles</span>
+            <span className="text-[10px] text-cyan-400 font-mono font-semibold">Real RIFT + Sim ML</span>
           </label>
           <select
             value={matcherChoice}
             onChange={(e) => setMatcherChoice(e.target.value)}
             className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 font-semibold focus:outline-none focus:border-cyan-500 text-xs"
           >
-            <option value="fusion">LunaMatch Multi-Profile Fusion (Simulated LoFTR + RIFT + LightGlue)</option>
+            <option value="fusion">LunaMatch Multi-Expert Fusion (Real RIFT + Sim LoFTR + Sim LightGlue)</option>
+            <option value="rift">RIFT (Real Analytical — Phase Congruency + MIM Descriptors)</option>
             <option value="loftr">LoFTR Profile (Simulated — no real model weights loaded)</option>
-            <option value="rift">RIFT Profile (Simulated — phase boundary synthetic noise)</option>
             <option value="lightglue">SuperPoint + LightGlue Profile (Simulated — sparse synthetic noise)</option>
             <option value="mock">MockMatcher (Simulated Benchmark Control Mode)</option>
           </select>
-          <div className="text-[10px] text-amber-400/90 leading-tight bg-amber-950/40 p-1.5 rounded border border-amber-800/40">
-            ⚠️ Note: Matchers run simulated synthetic profiles for architectural verification (no offline neural weights packaged).
+          <div className="text-[10px] text-cyan-400/90 leading-tight bg-cyan-950/40 p-1.5 rounded border border-cyan-800/40">
+            ✓ RIFT executes real 2D FFT Log-Gabor phase congruency &amp; MIM matching on raw pixel data (zero ground-truth cheating).
           </div>
 
           {matcherChoice === 'mock' && (
