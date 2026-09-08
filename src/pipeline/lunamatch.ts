@@ -38,7 +38,7 @@ export class LunaMatchPipeline {
   private preprocessor: RadiometricPreprocessor;
   private illuminationNormalizer: IlluminationInvariantNormalizer;
   private geometryProvider: MockGeometryProvider;
-  private loftrMatcher: SimulatedLoFTRProfileMatcher;
+  private loftrMatcher: InstanceType<typeof SimulatedLoFTRProfileMatcher>;
   private riftMatcher: RIFTMatcher;
   private lightglueMatcher: LightGlueMatcher;
   private mockMatcher: MockMatcher;

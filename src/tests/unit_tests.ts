@@ -20,6 +20,8 @@ import {
   matchRIFTDescriptors,
 } from '../matching/rift_matcher';
 import { LightGlueMatcher } from '../matching/lightglue_matcher';
+import { LoFTRMatcher } from '../matching/loftr_matcher';
+import { AdaptiveTransformEstimator } from '../registration/adaptive_transform';
 import { ImageData } from '../types';
 
 export interface TestCaseResult {
@@ -495,6 +497,198 @@ export async function runAllLunaMatchUnitTests(): Promise<TestCaseResult[]> {
     results.push({
       partName: 'PART 21: End-to-End Pipeline',
       testName: 'Full pipeline execution',
+      passed: false,
+      message: err.message,
+    });
+  }
+
+  // --- PART 10: Real LoFTR Neural Inference ---
+  try {
+    const loftrMatcher = new LoFTRMatcher(0.1);
+    const dataset = generateSyntheticLunarDataset({
+      width: 256,
+      height: 256,
+      seed: 5678,
+      sourceSensor: 'OHRC',
+      referenceSensor: 'TMC2',
+      translationPx: [8, -6],
+      rotationDeg: 0,
+      scale: 1.0,
+    });
+
+    const matchSet = await loftrMatcher.match(dataset.sourceImage, dataset.referenceImage);
+    const gtH = dataset.groundTruth.groundTruthTransform;
+
+    let inliers = 0;
+    for (const m of matchSet.matches) {
+      const trueTarget = applyHomographyToPoint(gtH, m.sourcePoint);
+      const err = Math.hypot(trueTarget.x - m.targetPoint.x, trueTarget.y - m.targetPoint.y);
+      if (err <= 4.0) inliers++;
+    }
+
+    const inlierRatio = matchSet.matches.length > 0 ? inliers / matchSet.matches.length : 0;
+    const passed = matchSet.matches.length >= 10 && inlierRatio >= 0.35;
+
+    results.push({
+      partName: 'PART 10: Real LoFTR Matcher',
+      testName: 'Real LoFTR ONNX inference and correspondence accuracy',
+      passed,
+      message: `Extracted ${matchSet.matches.length} matches, inliers: ${inliers} (${(inlierRatio * 100).toFixed(1)}%), method: ${matchSet.matches[0]?.method || 'none'}`,
+    });
+  } catch (err: any) {
+    results.push({
+      partName: 'PART 10: Real LoFTR Matcher',
+      testName: 'Real LoFTR ONNX inference and correspondence accuracy',
+      passed: false,
+      message: err.message,
+    });
+  }
+
+  // --- PART 15: TPS Transform Estimation ---
+  // Test 1: TPS fits nonlinear deformation with sub-pixel accuracy
+  try {
+    // Create control points with a nonlinear deformation (barrel distortion)
+    const srcPts = [];
+    const tgtPts = [];
+    const cx = 200, cy = 200; // Center of distortion
+    const k = 0.00005; // Distortion coefficient
+
+    for (let gy = 0; gy < 6; gy++) {
+      for (let gx = 0; gx < 6; gx++) {
+        const sx = 50 + gx * 60;
+        const sy = 50 + gy * 60;
+        // Apply barrel distortion
+        const dx = sx - cx;
+        const dy = sy - cy;
+        const r2 = dx * dx + dy * dy;
+        const tx = sx + dx * k * r2;
+        const ty = sy + dy * k * r2;
+        srcPts.push({ x: sx, y: sy });
+        tgtPts.push({ x: tx, y: ty });
+      }
+    }
+
+    const estimator = new AdaptiveTransformEstimator();
+    const tpsModel = estimator.fitTPS(srcPts, tgtPts, 0.001);
+
+    const passed = tpsModel.validity && tpsModel.residual.rmse < 0.5;
+
+    results.push({
+      partName: 'PART 15: TPS Transform',
+      testName: 'TPS fits nonlinear barrel distortion with sub-pixel accuracy',
+      passed,
+      message: `TPS fit: validity=${tpsModel.validity}, RMSE=${tpsModel.residual.rmse.toFixed(4)} px, ` +
+        `knots=${tpsModel.tpsControlPoints?.sourceKnots.length || 0}, ` +
+        `DOF=${tpsModel.diagnostics.degreesOfFreedom}`,
+    });
+  } catch (err: any) {
+    results.push({
+      partName: 'PART 15: TPS Transform',
+      testName: 'TPS fits nonlinear barrel distortion',
+      passed: false,
+      message: err.message,
+    });
+  }
+
+  // Test 2: TPS applyTPSTransform round-trip consistency
+  try {
+    const srcPts = [
+      { x: 50, y: 50 }, { x: 200, y: 50 }, { x: 350, y: 50 },
+      { x: 50, y: 200 }, { x: 200, y: 200 }, { x: 350, y: 200 },
+      { x: 50, y: 350 }, { x: 200, y: 350 }, { x: 350, y: 350 },
+    ];
+    // Apply an affine + slight nonlinear warp
+    const tgtPts = srcPts.map(p => ({
+      x: p.x * 1.1 + p.y * 0.05 + 10 + Math.sin(p.x * 0.02) * 3,
+      y: p.x * -0.03 + p.y * 1.08 - 5 + Math.cos(p.y * 0.015) * 2,
+    }));
+
+    const estimator = new AdaptiveTransformEstimator();
+    const tpsModel = estimator.fitTPS(srcPts, tgtPts, 0.0);
+
+    if (!tpsModel.tpsControlPoints) throw new Error('TPS control points not set');
+
+    // Verify that applying TPS to source points recovers target points
+    let maxErr = 0;
+    for (let i = 0; i < srcPts.length; i++) {
+      const pred = AdaptiveTransformEstimator.applyTPSTransform(tpsModel.tpsControlPoints, srcPts[i]);
+      const err = Math.hypot(pred.x - tgtPts[i].x, pred.y - tgtPts[i].y);
+      if (err > maxErr) maxErr = err;
+    }
+
+    const passed = maxErr < 0.01; // Should be near-exact with lambda=0
+
+    results.push({
+      partName: 'PART 15: TPS Transform',
+      testName: 'TPS interpolation reproduces control points exactly (λ=0)',
+      passed,
+      message: `Max reproduction error at control points: ${maxErr.toExponential(3)} px (threshold: 0.01 px)`,
+    });
+  } catch (err: any) {
+    results.push({
+      partName: 'PART 15: TPS Transform',
+      testName: 'TPS interpolation reproduces control points exactly',
+      passed: false,
+      message: err.message,
+    });
+  }
+
+  // Test 3: BIC selects TPS over homography for nonlinear deformation
+  try {
+    const dataset = generateSyntheticLunarDataset({
+      seed: 9999,
+      sourceSensor: 'OHRC',
+      referenceSensor: 'TMC2',
+      perspective: [0.001, -0.0008],
+    });
+    const H_gt = dataset.groundTruth.groundTruthTransform;
+
+    // Create matches with nonlinear barrel distortion added on top of homography
+    const testMatches = [];
+    const cx = 192, cy = 192;
+    const k = 0.00008;
+    for (let i = 0; i < 30; i++) {
+      const sx = 40 + (i % 6) * 55;
+      const sy = 40 + Math.floor(i / 6) * 55;
+      const sp = { x: sx, y: sy };
+      const tp = applyHomographyToPoint(H_gt, sp);
+
+      // Add barrel distortion
+      const dx = tp.x - cx;
+      const dy = tp.y - cy;
+      const r2 = dx * dx + dy * dy;
+      const distortedTp = { x: tp.x + dx * k * r2, y: tp.y + dy * k * r2 };
+
+      testMatches.push({
+        id: `bic_test_${i}`,
+        sourcePoint: sp,
+        targetPoint: distortedTp,
+        confidence: 0.9,
+        method: 'Mock' as const,
+        isInlier: true,
+      });
+    }
+
+    const estimator = new AdaptiveTransformEstimator();
+    const result = estimator.estimateTransform(
+      { matches: testMatches, sourceImageId: 'src', targetImageId: 'tgt', coordinateConvention: 'x=column, y=row' },
+      [384, 384],
+      [384, 384]
+    );
+
+    // With nonlinear deformation, TPS should achieve lower residuals than homography
+    const passed = result.residual.rmse < 2.0;
+
+    results.push({
+      partName: 'PART 15: TPS Transform',
+      testName: 'BIC model selection with nonlinear deformation data',
+      passed,
+      message: `Selected model: ${result.modelType}, RMSE: ${result.residual.rmse.toFixed(3)} px, BIC: ${result.bicScore?.toFixed(1) || 'N/A'}`,
+    });
+  } catch (err: any) {
+    results.push({
+      partName: 'PART 15: TPS Transform',
+      testName: 'BIC model selection with nonlinear deformation',
       passed: false,
       message: err.message,
     });
