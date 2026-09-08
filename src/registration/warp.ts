@@ -7,6 +7,7 @@
 
 import { ImageData, TransformModel } from '../types';
 import { applyHomographyToPoint, invert3x3 } from '../generator/synthetic';
+import { AdaptiveTransformEstimator } from './adaptive_transform';
 
 export class ImageWarper {
   /**
@@ -38,6 +39,19 @@ export class ImageWarper {
       ];
     }
 
+    let inverseTps: NonNullable<TransformModel['tpsControlPoints']> | undefined;
+    if (transform.modelType === 'tps' && transform.tpsControlPoints) {
+      const tpsEstimator = new AdaptiveTransformEstimator();
+      const backwardTpsModel = tpsEstimator.fitTPS(
+        transform.tpsControlPoints.targetKnots,
+        transform.tpsControlPoints.sourceKnots,
+        0.1
+      );
+      if (backwardTpsModel.validity && backwardTpsModel.tpsControlPoints) {
+        inverseTps = backwardTpsModel.tpsControlPoints;
+      }
+    }
+
     const srcPixels = source.pixels;
     const srcMask = source.mask;
     const srcW = source.width;
@@ -46,7 +60,14 @@ export class ImageWarper {
     for (let ty = 0; ty < outH; ty++) {
       for (let tx = 0; tx < outW; tx++) {
         const tgtPt = { x: tx, y: ty };
-        const srcPt = applyHomographyToPoint(H_inv, tgtPt);
+        let srcPt: { x: number; y: number };
+        
+        if (inverseTps) {
+          srcPt = AdaptiveTransformEstimator.applyTPSTransform(inverseTps, tgtPt);
+        } else {
+          srcPt = applyHomographyToPoint(H_inv, tgtPt);
+        }
+        
         const outIdx = ty * outW + tx;
 
         if (srcPt.x >= 0 && srcPt.x < srcW - 1 && srcPt.y >= 0 && srcPt.y < srcH - 1) {

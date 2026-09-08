@@ -60,6 +60,14 @@ export class AdaptiveTransformEstimator implements TransformEstimator {
       { model: homography, bic: this.calculateBIC(homography.residual.rmse * homography.residual.rmse * n, n, 8) },
     ];
 
+    // 4. Fit TPS if >= 6 inlier matches
+    if (n >= 6) {
+      const tps = this.fitTPS(srcPts, tgtPts);
+      if (tps.validity) {
+        candidates.push({ model: tps, bic: this.calculateBIC(tps.residual.rmse * tps.residual.rmse * n, n, 2 * n + 6) });
+      }
+    }
+
     // Select candidate with lowest BIC (or Homography if performance is within 5%)
     candidates.sort((a, b) => a.bic - b.bic);
     const best = candidates[0].model;
@@ -171,6 +179,174 @@ export class AdaptiveTransformEstimator implements TransformEstimator {
 
     for (let i = 0; i < src.length; i++) {
       const pred = applyHomographyToPoint(M, src[i]);
+      const e = Math.hypot(pred.x - tgt[i].x, pred.y - tgt[i].y);
+      errs.push(e);
+      sum += e;
+      sqSum += e * e;
+      if (e > max) max = e;
+    }
+
+    errs.sort((a, b) => a - b);
+    const median = errs[Math.floor(errs.length / 2)] || 0;
+    const mean = sum / (src.length || 1);
+    const rmse = Math.sqrt(sqSum / (src.length || 1));
+
+    return { mean, median, rmse, max };
+  }
+
+  public fitTPS(src: Point2D[], tgt: Point2D[], lambda: number = 0.1): TransformModel {
+    const n = src.length;
+    const U = (r: number) => r === 0 ? 0 : r * r * Math.log(r);
+
+    const L: number[][] = Array.from({ length: n + 3 }, () => new Array(n + 3).fill(0));
+    
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const dx = src[i].x - src[j].x;
+        const dy = src[i].y - src[j].y;
+        const r = Math.hypot(dx, dy);
+        L[i][j] = U(r);
+        if (i === j) {
+          L[i][j] += lambda;
+        }
+      }
+      L[i][n] = 1;
+      L[i][n + 1] = src[i].x;
+      L[i][n + 2] = src[i].y;
+      
+      L[n][i] = 1;
+      L[n + 1][i] = src[i].x;
+      L[n + 2][i] = src[i].y;
+    }
+
+    const b_x = new Array(n + 3).fill(0);
+    const b_y = new Array(n + 3).fill(0);
+    for (let i = 0; i < n; i++) {
+      b_x[i] = tgt[i].x;
+      b_y[i] = tgt[i].y;
+    }
+
+    const w_x = this.solveLinearSystem(L, b_x);
+    const w_y = this.solveLinearSystem(L, b_y);
+
+    if (!w_x || !w_y) {
+      return {
+        modelType: 'tps',
+        residual: { mean: 0, median: 0, rmse: Infinity, max: 0 },
+        validity: false,
+        diagnostics: { degreesOfFreedom: 2 * n + 6, sampleCount: n },
+      };
+    }
+
+    const weights: number[][] = [];
+    for (let i = 0; i < n; i++) {
+      weights.push([w_x[i], w_y[i]]);
+    }
+    const affineParams: number[][] = [
+      [w_x[n], w_y[n]],
+      [w_x[n + 1], w_y[n + 1]],
+      [w_x[n + 2], w_y[n + 2]]
+    ];
+
+    const tpsControlPoints = {
+      sourceKnots: src,
+      targetKnots: tgt,
+      weights,
+      affineParams
+    };
+
+    const residuals = this.evaluateTPS(tpsControlPoints, src, tgt);
+
+    return {
+      modelType: 'tps',
+      tpsControlPoints,
+      residual: residuals,
+      validity: true,
+      diagnostics: { degreesOfFreedom: 2 * n + 6, sampleCount: n },
+    };
+  }
+
+  private solveLinearSystem(A: number[][], b: number[]): number[] | null {
+    const n = b.length;
+    const M: number[][] = A.map(row => [...row]);
+    const vec = [...b];
+
+    for (let i = 0; i < n; i++) {
+      let maxEl = Math.abs(M[i][i]);
+      let maxRow = i;
+      for (let k = i + 1; k < n; k++) {
+        if (Math.abs(M[k][i]) > maxEl) {
+          maxEl = Math.abs(M[k][i]);
+          maxRow = k;
+        }
+      }
+
+      if (maxEl < 1e-10) return null;
+
+      if (maxRow !== i) {
+        const tmpRow = M[i];
+        M[i] = M[maxRow];
+        M[maxRow] = tmpRow;
+        
+        const tmpVal = vec[i];
+        vec[i] = vec[maxRow];
+        vec[maxRow] = tmpVal;
+      }
+
+      for (let k = i + 1; k < n; k++) {
+        const c = -M[k][i] / M[i][i];
+        for (let j = i; j < n; j++) {
+          if (i === j) {
+            M[k][j] = 0;
+          } else {
+            M[k][j] += c * M[i][j];
+          }
+        }
+        vec[k] += c * vec[i];
+      }
+    }
+
+    const x = new Array(n).fill(0);
+    for (let i = n - 1; i >= 0; i--) {
+      x[i] = vec[i] / M[i][i];
+      for (let k = i - 1; k >= 0; k--) {
+        vec[k] -= M[k][i] * x[i];
+      }
+    }
+
+    return x;
+  }
+
+  static applyTPSTransform(tps: NonNullable<TransformModel['tpsControlPoints']>, point: Point2D): Point2D {
+    const U = (r: number) => r === 0 ? 0 : r * r * Math.log(r);
+    let x = tps.affineParams[0][0] + tps.affineParams[1][0] * point.x + tps.affineParams[2][0] * point.y;
+    let y = tps.affineParams[0][1] + tps.affineParams[1][1] * point.x + tps.affineParams[2][1] * point.y;
+
+    for (let i = 0; i < tps.sourceKnots.length; i++) {
+      const knot = tps.sourceKnots[i];
+      const dx = point.x - knot.x;
+      const dy = point.y - knot.y;
+      const r = Math.hypot(dx, dy);
+      const u = U(r);
+      x += tps.weights[i][0] * u;
+      y += tps.weights[i][1] * u;
+    }
+
+    return { x, y };
+  }
+
+  private evaluateTPS(
+    tps: NonNullable<TransformModel['tpsControlPoints']>,
+    src: Point2D[],
+    tgt: Point2D[]
+  ): { mean: number; median: number; rmse: number; max: number } {
+    const errs: number[] = [];
+    let sum = 0;
+    let sqSum = 0;
+    let max = 0;
+
+    for (let i = 0; i < src.length; i++) {
+      const pred = AdaptiveTransformEstimator.applyTPSTransform(tps, src[i]);
       const e = Math.hypot(pred.x - tgt[i].x, pred.y - tgt[i].y);
       errs.push(e);
       sum += e;
