@@ -20,7 +20,6 @@ import {
   matchRIFTDescriptors,
 } from '../matching/rift_matcher';
 import { LightGlueMatcher } from '../matching/lightglue_matcher';
-import { LoFTRMatcher } from '../matching/loftr_matcher';
 import { AdaptiveTransformEstimator } from '../registration/adaptive_transform';
 import { ImageData } from '../types';
 
@@ -497,48 +496,6 @@ export async function runAllLunaMatchUnitTests(): Promise<TestCaseResult[]> {
     results.push({
       partName: 'PART 21: End-to-End Pipeline',
       testName: 'Full pipeline execution',
-      passed: false,
-      message: err.message,
-    });
-  }
-
-  // --- PART 10: Real LoFTR Neural Inference ---
-  try {
-    const loftrMatcher = new LoFTRMatcher(0.1);
-    const dataset = generateSyntheticLunarDataset({
-      width: 256,
-      height: 256,
-      seed: 5678,
-      sourceSensor: 'OHRC',
-      referenceSensor: 'TMC2',
-      translationPx: [8, -6],
-      rotationDeg: 0,
-      scale: 1.0,
-    });
-
-    const matchSet = await loftrMatcher.match(dataset.sourceImage, dataset.referenceImage);
-    const gtH = dataset.groundTruth.groundTruthTransform;
-
-    let inliers = 0;
-    for (const m of matchSet.matches) {
-      const trueTarget = applyHomographyToPoint(gtH, m.sourcePoint);
-      const err = Math.hypot(trueTarget.x - m.targetPoint.x, trueTarget.y - m.targetPoint.y);
-      if (err <= 4.0) inliers++;
-    }
-
-    const inlierRatio = matchSet.matches.length > 0 ? inliers / matchSet.matches.length : 0;
-    const passed = matchSet.matches.length >= 10 && inlierRatio >= 0.35;
-
-    results.push({
-      partName: 'PART 10: Real LoFTR Matcher',
-      testName: 'Real LoFTR ONNX inference and correspondence accuracy',
-      passed,
-      message: `Extracted ${matchSet.matches.length} matches, inliers: ${inliers} (${(inlierRatio * 100).toFixed(1)}%), method: ${matchSet.matches[0]?.method || 'none'}`,
-    });
-  } catch (err: any) {
-    results.push({
-      partName: 'PART 10: Real LoFTR Matcher',
-      testName: 'Real LoFTR ONNX inference and correspondence accuracy',
       passed: false,
       message: err.message,
     });

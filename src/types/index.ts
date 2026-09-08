@@ -60,7 +60,7 @@ export interface ImageData {
   rawImageDataUrl?: string; // Cache for browser rendering
 }
 
-export type MatchMethod = 'LoFTR' | 'RIFT' | 'LightGlue' | 'SimulatedLoFTR' | 'SimulatedRIFT' | 'SimulatedLightGlue' | 'Mock' | 'Fused' | 'GroundTruth';
+export type MatchMethod = 'RIFT' | 'LightGlue' | 'SimulatedLoFTR' | 'SimulatedRIFT' | 'SimulatedLightGlue' | 'Mock' | 'Fused' | 'GroundTruth';
 
 /**
  * Point correspondence between source and target images
