@@ -40,18 +40,37 @@ This document details the neural weights, architectures, licenses, mathematical 
 
 ---
 
-## 2. LoFTR: Detector-Free Local Feature Matching (Assessment & Status)
+## 2. LoFTR: Detector-Free Local Feature Matching (Real Inference)
 
 ### 2.1 Overview & Architecture
 - **LoFTR**: Detector-Free Local Feature Matching with Transformers
   - *Paper*: Sun, Shen, Yuan, Zhou, Bao, Zhou (CVPR 2021), *"LoFTR: Detector-Free Local Feature Matching with Transformers"*
   - *Architecture*: Dense FPN feature extractor with linear Transformer (coarse $1/8$ cross-attention) + dual-softmax matching + fine-level correlation refinement ($1/2$ resolution).
 
-### 2.2 Technical Assessment: In-Browser Feasibility & Status
-- **Current Status**: **Simulated Profile Matcher** (`SimulatedLoFTRProfileMatcher`), clearly labeled in UI.
-- **Reason Real In-Browser Inference is Deferred**:
-  1. **Weight Distribution & Licensing**: Official pretrained checkpoints (`outdoor_ds.ckpt`, ~128MB to 250MB) are released as raw PyTorch `.ckpt` files under Apache 2.0, requiring custom PyTorch-dependent conversion scripts (`loftr2onnx`). Unofficial ONNX hosts on Hugging Face require authentication tokens (HTTP 401) and lack audited provenance.
-  2. **Memory & Compute Footprint**: LoFTR's coarse-to-fine full self-attention and cross-attention matrices require $O(N^2)$ quadratic memory for image tokens ($\approx 2400 \times 2400$ attention grids at $480 \times 480$ input), requiring over 1.2 GB WASM heap per forward pass. In browser WebAssembly, this frequently causes Out-Of-Memory (OOM) allocation crashes on client machines.
-  3. **Fixed Resolution Grid Constraint**: Standard LoFTR ONNX exports hardcode a fixed spatial grid (typically $640 \times 480$ or $480 \times 480$) and cannot handle arbitrary crop sizes from ISRO lunar swaths (OHRC / TMC-2) without significant distortion or resampling artifacts.
-- **Path to Real Inference**:
-  - Recommended deployment architecture for LoFTR is a dedicated server-side Python / PyTorch microservice with GPU acceleration (CUDA / TensorRT) or an optimized distilled Edge variant (e.g. EfficientLoFTR / Mobile-LoFTR) exported with dynamic axes.
+### 2.2 Current Status: Real ONNX Inference (`LoFTRMatcher`)
+- **Status**: **Real Neural Inference** via `onnxruntime-web` WASM backend.
+- **Model File**: `public/models/loftr_outdoor.onnx` — exported locally from Kornia's LoFTR with "outdoor" pretrained weights using `scripts/export_loftr_onnx.py`.
+- **License**: Apache License 2.0 (original LoFTR weights and Kornia framework).
+
+### 2.3 OOM Mitigation Strategy
+- LoFTR's $O(N^2)$ quadratic attention memory is mitigated by **strict downsampling** of all input images to a fixed $480 \times 480$ grid before inference.
+- At $480 \times 480$, the coarse attention grid is $60 \times 60 = 3600$ tokens, requiring ~$3600^2 \times 4 \approx 50$ MB for the attention matrix — well within the browser's WASM heap limit.
+- Output keypoint coordinates are **scaled back** to the original image dimensions after inference.
+
+### 2.4 Preprocessing & Coordinate Specifications
+- **Input Tensor**:
+  - Grayscale intensity $\in [0.0, 1.0]$, Float32.
+  - Dimensions: `[1, 1, 480, 480]` (fixed resolution, bilinear-interpolated from original).
+- **Output**:
+  - `keypoints0`: `[N, 2]` Float32 matched coordinates in image0 (480×480 grid space).
+  - `keypoints1`: `[N, 2]` Float32 matched coordinates in image1 (480×480 grid space).
+  - `confidence`: `[N]` Float32 match confidence scores.
+- **Coordinate Rescaling**: Output coordinates are multiplied by `(originalWidth / 480, originalHeight / 480)` to map back to pixel space.
+
+### 2.5 Model Generation
+```bash
+pip install torch kornia onnx onnxruntime
+python3 scripts/export_loftr_onnx.py
+# → Creates public/models/loftr_outdoor.onnx (~45 MB)
+```
+

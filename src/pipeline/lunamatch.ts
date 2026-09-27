@@ -21,7 +21,7 @@ import { IlluminationInvariantNormalizer } from '../illumination/invariance';
 import { ImagePyramidBuilder } from '../pyramids/multiscale';
 import { MockGeometryProvider } from '../geometry/lunar';
 import { MockMatcher } from '../matching/mock_matcher';
-import { SimulatedLoFTRProfileMatcher } from '../matching/loftr_matcher';
+import { LoFTRMatcher } from '../matching/loftr_matcher';
 import { RIFTMatcher } from '../matching/rift_matcher';
 import { LightGlueMatcher } from '../matching/lightglue_matcher';
 import { MatchFusionEngine } from '../matching/fusion';
@@ -38,7 +38,7 @@ export class LunaMatchPipeline {
   private preprocessor: RadiometricPreprocessor;
   private illuminationNormalizer: IlluminationInvariantNormalizer;
   private geometryProvider: MockGeometryProvider;
-  private loftrMatcher: SimulatedLoFTRProfileMatcher;
+  private loftrMatcher: LoFTRMatcher;
   private riftMatcher: RIFTMatcher;
   private lightglueMatcher: LightGlueMatcher;
   private mockMatcher: MockMatcher;
@@ -53,7 +53,7 @@ export class LunaMatchPipeline {
     this.preprocessor = new RadiometricPreprocessor();
     this.illuminationNormalizer = new IlluminationInvariantNormalizer();
     this.geometryProvider = new MockGeometryProvider();
-    this.loftrMatcher = new SimulatedLoFTRProfileMatcher();
+    this.loftrMatcher = new LoFTRMatcher();
     this.riftMatcher = new RIFTMatcher();
     this.lightglueMatcher = new LightGlueMatcher();
     this.mockMatcher = new MockMatcher({ mode: this.config.mockMode || 'low_noise' });

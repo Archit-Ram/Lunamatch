@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   GroundTruthData,
-  ImageData,
+  ImageData as LunaImageData,
   RegistrationResult,
   SensorType,
 } from './types';
@@ -26,6 +26,64 @@ import { AblationModal } from './components/AblationModal';
 import { TestRunnerModal } from './components/TestRunnerModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 
+
+/**
+ * Fetches a grayscale PNG from a URL and converts it to the pipeline's ImageData format.
+ */
+async function fetchPngAsImageData(
+  url: string,
+  sensor: SensorType,
+  viewLabel: string
+): Promise<LunaImageData> {
+  const response = await fetch(url);
+  const blob = await response.blob();
+  const bitmap = await createImageBitmap(blob);
+
+  // Draw to canvas to get pixel data
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(bitmap, 0, 0);
+  const rawPixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+
+  // Convert RGBA to grayscale Float32Array [0, 1]
+  const numPixels = bitmap.width * bitmap.height;
+  const pixels = new Float32Array(numPixels);
+  for (let i = 0; i < numPixels; i++) {
+    // PNGs from ISRO are already grayscale, so R=G=B; just use R channel
+    pixels[i] = rawPixels.data[i * 4] / 255.0;
+  }
+
+  // Create a grayscale data URL for the viewer
+  const dataUrl = canvas.toDataURL('image/png');
+
+  // Build sensor metadata (approximate values from PDS4 XML)
+  const sensorMeta = {
+    sensorId: sensor,
+    spatialResolutionMeters: sensor === 'OHRC' ? 0.25 : 5.0,
+    incidenceAngleDeg: sensor === 'TMC2' ? 25 : 0,
+    emissionAngleDeg: 0,
+    phaseAngleDeg: 25,
+    sunAzimuthDeg: 45,
+    sunElevationDeg: 25,
+    acquisitionTimestamp: '2021-11-22T21:23:22.5689Z',
+    productId: `ch2_tmc_${viewLabel}`,
+  };
+
+  return {
+    id: `real_${sensor}_${viewLabel}_${Date.now()}`,
+    pixels,
+    width: bitmap.width,
+    height: bitmap.height,
+    channels: 1,
+    dtype: 'float32',
+    sensorId: sensor,
+    metadata: sensorMeta,
+    rawImageDataUrl: dataUrl,
+  };
+}
+
 export default function App() {
   // Scenario and Sensor state
   const [selectedPreset, setSelectedPreset] = useState<string>('tycho');
@@ -35,10 +93,10 @@ export default function App() {
   const [mockMode, setMockMode] = useState<'perfect' | 'low_noise' | 'high_noise' | 'outlier_heavy' | 'clustered' | 'mixed'>('low_noise');
 
   // Active Images & Pipeline Result
-  const [sourceImage, setSourceImage] = useState<ImageData | null>(null);
-  const [referenceImage, setReferenceImage] = useState<ImageData | null>(null);
-  const [normSourceImage, setNormSourceImage] = useState<ImageData | null>(null);
-  const [normRefImage, setNormRefImage] = useState<ImageData | null>(null);
+  const [sourceImage, setSourceImage] = useState<LunaImageData | null>(null);
+  const [referenceImage, setReferenceImage] = useState<LunaImageData | null>(null);
+  const [normSourceImage, setNormSourceImage] = useState<LunaImageData | null>(null);
+  const [normRefImage, setNormRefImage] = useState<LunaImageData | null>(null);
   const [groundTruth, setGroundTruth] = useState<GroundTruthData | null>(null);
   const [registrationResult, setRegistrationResult] = useState<RegistrationResult | null>(null);
 
@@ -115,30 +173,84 @@ export default function App() {
     );
   }, []);
 
+  /**
+   * Load real satellite images from PNG files and run the pipeline.
+   */
+  const loadRealImages = useCallback(
+    async (preset: PresetScenario) => {
+      if (!preset.sourceImageUrl || !preset.referenceImageUrl) return;
+      setIsProcessing(true);
+
+      try {
+        // Fetch both PNGs and decode them via an offscreen canvas
+        const [srcImg, refImg] = await Promise.all([
+          fetchPngAsImageData(preset.sourceImageUrl, preset.sourceSensor, 'Aft (-25°)'),
+          fetchPngAsImageData(preset.referenceImageUrl, preset.referenceSensor, 'Nadir (0°)'),
+        ]);
+
+        const normalizer = new IlluminationInvariantNormalizer();
+        const nSrc = normalizer.extractInvariantRepresentation(srcImg);
+        const nRef = normalizer.extractInvariantRepresentation(refImg);
+
+        setSourceImage(srcImg);
+        setReferenceImage(refImg);
+        setNormSourceImage(nSrc);
+        setNormRefImage(nRef);
+        setGroundTruth(null); // No ground truth for real data
+
+        const pipeline = new LunaMatchPipeline({
+          matcher: matcherChoice,
+          mockMode,
+        });
+
+        const result = await pipeline.registerImages(
+          srcImg,
+          refImg,
+          undefined as any,
+          { matcherChoice, mockMode }
+        );
+
+        setRegistrationResult(result);
+      } catch (err) {
+        console.error('Failed to load real images:', err);
+      }
+      setIsProcessing(false);
+    },
+    [matcherChoice, mockMode]
+  );
+
   const handleSelectPreset = (preset: PresetScenario) => {
     setSelectedPreset(preset.id);
     setSourceSensor(preset.sourceSensor);
     setReferenceSensor(preset.referenceSensor);
-    loadScenario(
-      preset.sourceSensor,
-      preset.referenceSensor,
-      preset.sunAzimuthDelta,
-      preset.scaleFactor,
-      preset.rotationDeg,
-      Date.now() % 10000
-    );
+    if (preset.isRealData) {
+      loadRealImages(preset);
+    } else {
+      loadScenario(
+        preset.sourceSensor,
+        preset.referenceSensor,
+        preset.sunAzimuthDelta,
+        preset.scaleFactor,
+        preset.rotationDeg,
+        Date.now() % 10000
+      );
+    }
   };
 
   const handleRunCorrespondence = () => {
     const currentPreset = PRESET_SCENARIOS.find((p) => p.id === selectedPreset);
-    loadScenario(
-      sourceSensor,
-      referenceSensor,
-      currentPreset?.sunAzimuthDelta || 120,
-      currentPreset?.scaleFactor || 1.25,
-      currentPreset?.rotationDeg || 15,
-      Date.now() % 10000
-    );
+    if (currentPreset?.isRealData) {
+      loadRealImages(currentPreset);
+    } else {
+      loadScenario(
+        sourceSensor,
+        referenceSensor,
+        currentPreset?.sunAzimuthDelta || 120,
+        currentPreset?.scaleFactor || 1.25,
+        currentPreset?.rotationDeg || 15,
+        Date.now() % 10000
+      );
+    }
   };
 
   const handleResetScene = () => {

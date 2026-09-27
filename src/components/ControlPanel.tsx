@@ -22,6 +22,9 @@ export interface PresetScenario {
   scaleFactor: number;
   rotationDeg: number;
   description: string;
+  isRealData?: boolean;
+  sourceImageUrl?: string;
+  referenceImageUrl?: string;
 }
 
 export const PRESET_SCENARIOS: PresetScenario[] = [
@@ -64,6 +67,46 @@ export const PRESET_SCENARIOS: PresetScenario[] = [
     scaleFactor: 1.1,
     rotationDeg: 8,
     description: 'Permanently shadowed region (PSR) polar crater rim matching.',
+  },
+  // ── Real Chandrayaan-2 TMC-2 Stereo Pairs (geometry-aligned overlaps) ──
+  {
+    id: 'ch2_overlap_north',
+    name: 'CH2 TMC-2 North Overlap (REAL)',
+    sourceSensor: 'TMC2',
+    referenceSensor: 'TMC2',
+    sunAzimuthDelta: 25,
+    scaleFactor: 1.0,
+    rotationDeg: 0,
+    description: 'Real CH2 TMC-2 Aft vs Nadir — lat ≈ -34° (geometry-aligned overlap).',
+    isRealData: true,
+    sourceImageUrl: '/test_images/ch2_tmc_nca_overlap_north.png',
+    referenceImageUrl: '/test_images/ch2_tmc_ncn_overlap_north.png',
+  },
+  {
+    id: 'ch2_overlap_center',
+    name: 'CH2 TMC-2 Center Overlap (REAL)',
+    sourceSensor: 'TMC2',
+    referenceSensor: 'TMC2',
+    sunAzimuthDelta: 25,
+    scaleFactor: 1.0,
+    rotationDeg: 0,
+    description: 'Real CH2 TMC-2 Aft vs Nadir — lat ≈ -45° (bright escarpment region).',
+    isRealData: true,
+    sourceImageUrl: '/test_images/ch2_tmc_nca_overlap_center.png',
+    referenceImageUrl: '/test_images/ch2_tmc_ncn_overlap_center.png',
+  },
+  {
+    id: 'ch2_overlap_south',
+    name: 'CH2 TMC-2 South Overlap (REAL)',
+    sourceSensor: 'TMC2',
+    referenceSensor: 'TMC2',
+    sunAzimuthDelta: 25,
+    scaleFactor: 1.0,
+    rotationDeg: 0,
+    description: 'Real CH2 TMC-2 Aft vs Nadir — lat ≈ -55° (cratered highlands).',
+    isRealData: true,
+    sourceImageUrl: '/test_images/ch2_tmc_nca_overlap_south.png',
+    referenceImageUrl: '/test_images/ch2_tmc_ncn_overlap_south.png',
   },
 ];
 
@@ -122,7 +165,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 >
                   <div className="font-semibold text-xs text-slate-100 flex items-center justify-between">
                     <span>{p.name}</span>
-                    <span className="text-[10px] font-mono text-cyan-400">Δ{p.sunAzimuthDelta}°</span>
+                    <span className="flex items-center gap-1">
+                      {p.isRealData && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 bg-emerald-950 border border-emerald-500/50 text-emerald-400 rounded">REAL DATA</span>
+                      )}
+                      <span className="text-[10px] font-mono text-cyan-400">Δ{p.sunAzimuthDelta}°</span>
+                    </span>
                   </div>
                   <p className="text-[10px] text-slate-400 mt-0.5 leading-snug line-clamp-1">{p.description}</p>
                 </button>
@@ -175,14 +223,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             onChange={(e) => setMatcherChoice(e.target.value)}
             className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 font-semibold focus:outline-none focus:border-cyan-500 text-xs"
           >
-            <option value="fusion">LunaMatch Multi-Expert Fusion (Real RIFT + Real LightGlue + Sim LoFTR)</option>
+            <option value="fusion">LunaMatch Multi-Expert Fusion (Real RIFT + Real LightGlue + Real LoFTR)</option>
             <option value="rift">RIFT (Real Analytical — Phase Congruency + MIM Descriptors)</option>
             <option value="lightglue">SuperPoint + LightGlue (Real ONNX Neural Inference — Sparse Graph Matching)</option>
-            <option value="loftr">LoFTR Profile (Simulated — no real model weights loaded)</option>
+            <option value="loftr">LoFTR (Real ONNX Neural Inference — Dense Transformer Matching)</option>
             <option value="mock">MockMatcher (Simulated Benchmark Control Mode)</option>
           </select>
           <div className="text-[10px] text-cyan-400/90 leading-tight bg-cyan-950/40 p-1.5 rounded border border-cyan-800/40">
-            ✓ Real Inference: RIFT (2D FFT Log-Gabor) &amp; SuperPoint+LightGlue (ONNX Transformer) analyze raw pixels with zero ground-truth access.
+            ✓ Real Inference: All 3 matchers — RIFT (2D FFT Log-Gabor), SuperPoint+LightGlue (ONNX Transformer), and LoFTR (ONNX Dense Transformer) — analyze raw pixels with zero ground-truth access.
           </div>
 
           {matcherChoice === 'mock' && (

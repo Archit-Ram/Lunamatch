@@ -56,10 +56,6 @@ export const MetricsBar: React.FC<MetricsBarProps> = ({
                   SUB-PIXEL ACCURACY
                 </span>
               )}
-              <span className="text-[10px] font-mono font-semibold px-2 py-0.5 bg-amber-950/90 border border-amber-500/60 text-amber-300 rounded flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
-                SIMULATED PROFILE (No neural weights loaded)
-              </span>
             </div>
           )}
         </div>

@@ -52,7 +52,6 @@ export const Header: React.FC<HeaderProps> = ({
           <Cpu className="w-3.5 h-3.5 text-amber-400" />
           <span className="text-slate-400">Matcher:</span>
           <span className="font-mono font-semibold text-amber-300 capitalize">{activeMatcher}</span>
-          <span className="text-[10px] bg-amber-950 px-1 py-0.2 rounded text-amber-400 border border-amber-700/50">Simulated</span>
         </div>
 
         <button
