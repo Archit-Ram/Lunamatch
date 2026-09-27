@@ -1,8 +1,36 @@
+# Dependencies
 node_modules/
+.venv/
+
+# Build output
 build/
 dist/
 coverage/
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Logs
 *.log
+
+# Environment
 .env*
 !.env.example
+
+# Large ONNX model files (download separately)
+public/models/*.onnx
+
+# Raw satellite data bundles (download from ISSDC)
+ch2_tmc_*/
+ch1_tmc_*/
+*.ckpt
+
+# Temporary test artifacts
+LoFTR_teacher.onnx
+test_loftr.onnx
+scripts/test_export.py
+
+# IDE
+.vscode/
+.idea/

@@ -111,7 +111,7 @@ export class MatchFusionEngine {
         sumTgtY += m.targetPoint.y * w;
         totalWeight += w;
 
-        if (m.method === 'SimulatedLoFTR' || (m.method as string) === 'LoFTR') {
+        if (m.method === 'LoFTR' || m.method === 'SimulatedLoFTR') {
           loftrConf = Math.max(loftrConf, m.confidence);
           agreeingMethodsCount++;
         } else if (m.method === 'SimulatedRIFT' || (m.method as string) === 'RIFT') {
