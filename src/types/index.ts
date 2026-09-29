@@ -60,7 +60,7 @@ export interface ImageData {
   rawImageDataUrl?: string; // Cache for browser rendering
 }
 
-export type MatchMethod = 'LoFTR' | 'RIFT' | 'LightGlue' | 'SimulatedLoFTR' | 'SimulatedRIFT' | 'SimulatedLightGlue' | 'Mock' | 'Fused' | 'GroundTruth';
+export type MatchMethod = 'LoFTR' | 'RIFT' | 'LightGlue' | 'SimulatedLoFTR' | 'SimulatedRIFT' | 'SimulatedLightGlue' | 'Mock' | 'Fused' | 'GroundTruth' | 'AreaCorrelation';
 
 /**
  * Point correspondence between source and target images
@@ -78,12 +78,18 @@ export interface Match {
     geometryConsistency?: number;
     photometricConsistency?: number;
     agreementCount?: number;
+    /** Effective number of statistically independent experts behind a fused match (Part 28). */
+    effectiveIndependentExperts?: number;
   };
   scale?: number;
   orientationDeg?: number;
-  uncertaintyPx?: number; // Estimated 1-sigma uncertainty in pixels
+  uncertaintyPx?: number; // Estimated 1-sigma uncertainty in pixels; equals sqrt(trace(covariance)/2) when a covariance exists
+  /** Target-space 2x2 covariance of this correspondence (px^2). Present on fused, chained and anchored matches. */
+  covariance?: { xx: number; xy: number; yy: number };
   isInlier?: boolean;
   reprojectionErrorPx?: number;
+  /** True when accepted at a relaxed confidence solely to fill a spatial coverage gap (Part 27). */
+  acceptedForCoverage?: boolean;
 }
 
 export interface MatchSet {
@@ -114,6 +120,21 @@ export interface TransformModel {
   };
   validity: boolean;
   bicScore?: number; // Bayesian Information Criterion for model selection
+  /** Present when the model came from along-track pushbroom segmentation (Part 24). */
+  pushbroomSegments?: {
+    axis: 'x' | 'y';
+    /** Cross-validated RMSE (px) of this model vs the best global model it was selected over. */
+    cvRmsePx?: number;
+    cvRmseGlobalPx?: number;
+    segments: Array<{
+      index: number;
+      start: number;
+      end: number;
+      matchCount: number;
+      fallbackToGlobal: boolean;
+      params: number[]; // [a11, a12, tx, a21, a22, ty]
+    }>;
+  };
   inlierRatio?: number;
   diagnostics: {
     conditionNumber?: number;
@@ -154,6 +175,43 @@ export interface DiagnosticInfo {
     uniformity: number;
     uncertainty: number;
     total: number;
+    textureRouting?: number;
+  };
+  /** Tile-level texture routing stats (Part 23), present when texture routing ran. */
+  textureRoutingStats?: {
+    tileSize: number;
+    totalTiles: number;
+    featureRichTiles: number;
+    lowTextureTiles: number;
+    areaCorrelationMatches: number;
+  };
+  /** Ground-truth-free confidence in the registration (Part 29). 'success' status alone does not imply a good result. */
+  quality?: { level: 'high' | 'medium' | 'low'; reasons: string[] };
+  /** Which matching experts actually ran, and which were skipped (e.g. model file missing) and why. */
+  matchers?: {
+    used: string[];
+    skipped: Array<{ name: string; reason: string }>;
+  };
+  /** Coverage gap-filling feedback loop (Part 27). */
+  uniformityStats?: {
+    gridCells: number;
+    coverageBefore: number;
+    coverageAfter: number;
+    cellsFilledFromPool: number;
+    cellsFilledByProbe: number;
+    emptyCellsRemaining: number;
+    confidenceFloor: number;
+    nccFloor: number;
+  };
+  /** Permanently shadowed region handling (Part 26). */
+  psrStats?: {
+    flag: 'OUT_OF_SCOPE_PSR' | 'NONE';
+    sourceDarkTiles: number;
+    referenceDarkTiles: number;
+    sourceDarkFraction: number;
+    matchesRejected: number;
+    /** True when the rejection rule used dark-in-both-images confirmation (needs differing sun azimuth). */
+    confirmedByIlluminationDiversity: boolean;
   };
   warnings: string[];
 }
@@ -172,6 +230,21 @@ export interface RegistrationResult {
   registeredImage?: ImageData;
   metrics: EvaluationMetrics;
   diagnostics: DiagnosticInfo;
+}
+
+/**
+ * Result of a (potentially bridged) hierarchical registration. When the
+ * source/reference sensors are far apart on the GSD scale (e.g. OHRC/IIRS),
+ * `chainPath` lists the intermediate sensors that were matched pairwise and
+ * composed, and `hopResults` holds each hop's own RegistrationResult for
+ * inspection/diagnostics. `usedDirectMatch` is true when the gap did not
+ * require chaining, or bridge imagery was unavailable and the pipeline fell
+ * back to a direct match (see warnings for the reason).
+ */
+export interface HierarchicalRegistrationResult extends RegistrationResult {
+  chainPath: SensorType[];
+  hopResults: RegistrationResult[];
+  usedDirectMatch: boolean;
 }
 
 export interface GroundTruthData {

@@ -10,6 +10,12 @@ import { MatchSet, Point2D, TransformModel, TransformType } from '../types';
 import { TransformEstimator } from '../core/interfaces';
 import { applyHomographyToPoint } from '../generator/synthetic';
 import { GeometricGraphFilter } from '../filtering/graph_consistency';
+import { fitPushbroomModel, PushbroomOptions } from './pushbroom';
+
+/** Minimum inlier matches before the pushbroom candidate is even considered (needed for meaningful CV). */
+const PUSHBROOM_MIN_MATCHES = 20;
+/** Pushbroom must beat the best global model's CV error by this factor to be selected. */
+const PUSHBROOM_CV_MARGIN = 0.95;
 
 export class AdaptiveTransformEstimator implements TransformEstimator {
   private filter: GeometricGraphFilter;
@@ -21,7 +27,8 @@ export class AdaptiveTransformEstimator implements TransformEstimator {
   estimateTransform(
     matches: MatchSet,
     sourceDim: [number, number],
-    targetDim: [number, number]
+    targetDim: [number, number],
+    estimatorOptions?: { pushbroom?: PushbroomOptions }
   ): TransformModel {
     const inlierMatches = matches.matches.filter((m) => m.isInlier !== false);
     const n = inlierMatches.length;
@@ -73,7 +80,123 @@ export class AdaptiveTransformEstimator implements TransformEstimator {
     const best = candidates[0].model;
     best.bicScore = candidates[0].bic;
 
+    // 5. Per-strip pushbroom model (Part 24). BIC cannot judge it fairly against an
+    // interpolating TPS (whose training residual is ~0 by construction), so the choice
+    // between the BIC winner and the pushbroom model is made on k-fold cross-validated
+    // prediction error instead, and pushbroom must win by a clear margin.
+    if (estimatorOptions?.pushbroom && n >= PUSHBROOM_MIN_MATCHES) {
+      const pb = this.fitPushbroom(inlierMatches, srcPts, tgtPts, sourceDim, estimatorOptions.pushbroom);
+      if (pb) {
+        const cv = this.crossValidate(inlierMatches, best.modelType, sourceDim, estimatorOptions.pushbroom);
+        if (cv && cv.pushbroom < cv.global * PUSHBROOM_CV_MARGIN && pb.model.pushbroomSegments) {
+          pb.model.pushbroomSegments.cvRmsePx = cv.pushbroom;
+          pb.model.pushbroomSegments.cvRmseGlobalPx = cv.global;
+          pb.model.bicScore = this.calculateBIC(pb.model.residual.rmse * pb.model.residual.rmse * n, n, pb.k);
+          return pb.model;
+        }
+      }
+    }
+
     return best;
+  }
+
+  /**
+   * Fits the along-track segmented model and re-expresses it as an ordinary TPS
+   * TransformModel (refit on a dense grid of the piecewise field) so ImageWarper
+   * and the rest of the pipeline consume it unchanged. Residuals are measured
+   * against the ORIGINAL matches, not the grid, so the score reflects real fit.
+   */
+  private fitPushbroom(
+    matches: MatchSet['matches'],
+    src: Point2D[],
+    tgt: Point2D[],
+    sourceDim: [number, number],
+    options: PushbroomOptions
+  ): { model: TransformModel; k: number } | null {
+    const fit = fitPushbroomModel(matches, sourceDim[0], sourceDim[1], options);
+    if (!fit) return null;
+
+    const gridN = 10;
+    const gs: Point2D[] = [];
+    const gt: Point2D[] = [];
+    for (let gy = 0; gy < gridN; gy++) {
+      for (let gx = 0; gx < gridN; gx++) {
+        const p = { x: ((gx + 0.5) / gridN) * sourceDim[0], y: ((gy + 0.5) / gridN) * sourceDim[1] };
+        gs.push(p);
+        gt.push(fit.apply(p));
+      }
+    }
+    const tps = this.fitTPS(gs, gt, 0.01);
+    if (!tps.validity || !tps.tpsControlPoints) return null;
+
+    const residual = this.evaluateTPS(tps.tpsControlPoints, src, tgt);
+    return {
+      k: fit.effectiveParameters,
+      model: {
+        ...tps,
+        residual,
+        diagnostics: { degreesOfFreedom: fit.effectiveParameters, sampleCount: src.length },
+        pushbroomSegments: {
+          axis: fit.axis,
+          segments: fit.segments.map((s) => ({
+            index: s.index,
+            start: s.start,
+            end: s.end,
+            matchCount: s.matchCount,
+            fallbackToGlobal: s.fallbackToGlobal,
+            params: s.params,
+          })),
+        },
+      },
+    };
+  }
+
+  /**
+   * 5-fold cross-validated RMSE (px) of the currently-best global model family vs the
+   * pushbroom model. Folds are deterministic (index mod k).
+   */
+  private crossValidate(
+    matches: MatchSet['matches'],
+    globalType: TransformType,
+    sourceDim: [number, number],
+    pbOptions: PushbroomOptions
+  ): { global: number; pushbroom: number } | null {
+    const K = 5;
+    let gSq = 0;
+    let pSq = 0;
+    let count = 0;
+
+    for (let f = 0; f < K; f++) {
+      const train = matches.filter((_, i) => i % K !== f);
+      const test = matches.filter((_, i) => i % K === f);
+      if (train.length < 8 || test.length === 0) continue;
+
+      const trS = train.map((m) => m.sourcePoint);
+      const trT = train.map((m) => m.targetPoint);
+
+      let globalModel: TransformModel;
+      switch (globalType) {
+        case 'rigid': globalModel = this.fitRigid(trS, trT); break;
+        case 'affine': globalModel = this.fitAffine(trS, trT); break;
+        case 'homography': globalModel = this.fitHomography(trS, trT); break;
+        default: globalModel = this.fitTPS(trS, trT); break;
+      }
+      const pbFit = fitPushbroomModel(train, sourceDim[0], sourceDim[1], pbOptions);
+      if (!pbFit || !globalModel.validity) continue;
+
+      for (const m of test) {
+        const gp = globalModel.modelType === 'tps' && globalModel.tpsControlPoints
+          ? AdaptiveTransformEstimator.applyTPSTransform(globalModel.tpsControlPoints, m.sourcePoint)
+          : applyHomographyToPoint(globalModel.matrix!, m.sourcePoint);
+        const pp = pbFit.apply(m.sourcePoint);
+        gSq += (gp.x - m.targetPoint.x) ** 2 + (gp.y - m.targetPoint.y) ** 2;
+        pSq += (pp.x - m.targetPoint.x) ** 2 + (pp.y - m.targetPoint.y) ** 2;
+        count++;
+      }
+    }
+
+    if (count === 0) return null;
+    return { global: Math.sqrt(gSq / count), pushbroom: Math.sqrt(pSq / count) };
   }
 
   private calculateBIC(rss: number, n: number, k: number): number {

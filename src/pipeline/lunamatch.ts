@@ -25,6 +25,11 @@ import { LoFTRMatcher } from '../matching/loftr_matcher';
 import { RIFTMatcher } from '../matching/rift_matcher';
 import { LightGlueMatcher } from '../matching/lightglue_matcher';
 import { MatchFusionEngine } from '../matching/fusion';
+import { assessRegistrationQuality } from '../evaluation/quality';
+import { UniformityGapFiller } from '../uniformity/gap_fill';
+import { PSRDetector, PSR_FLAG, PSRMask } from '../preprocessing/psr';
+import { IIRSPCAEmbedding } from '../spectral/pca';
+import { AreaCorrelationMatcher } from '../matching/area_correlation_matcher';
 import { GeometricGraphFilter } from '../filtering/graph_consistency';
 import { AdaptiveTransformEstimator } from '../registration/adaptive_transform';
 import { ImageWarper } from '../registration/warp';
@@ -32,6 +37,8 @@ import { QuadraticSubPixelRefiner } from '../refinement/subpixel';
 import { SpatialUniformitySelector } from '../uniformity/spatial';
 import { UncertaintyEstimator } from '../uncertainty/estimator';
 import { LunaMatchEvaluator } from '../evaluation/benchmark';
+
+const PUSHBROOM_SENSORS: SensorType[] = ['OHRC', 'TMC2', 'IIRS'];
 
 export class LunaMatchPipeline {
   private config: PipelineConfig;
@@ -42,6 +49,7 @@ export class LunaMatchPipeline {
   private riftMatcher: RIFTMatcher;
   private lightglueMatcher: LightGlueMatcher;
   private mockMatcher: MockMatcher;
+  private areaCorrelationMatcher: AreaCorrelationMatcher;
   private fusionEngine: MatchFusionEngine;
   private geometricFilter: GeometricGraphFilter;
   private transformEstimator: AdaptiveTransformEstimator;
@@ -57,6 +65,7 @@ export class LunaMatchPipeline {
     this.riftMatcher = new RIFTMatcher();
     this.lightglueMatcher = new LightGlueMatcher();
     this.mockMatcher = new MockMatcher({ mode: this.config.mockMode || 'low_noise' });
+    this.areaCorrelationMatcher = new AreaCorrelationMatcher({ ...this.config.textureRouting });
     this.fusionEngine = new MatchFusionEngine({ weights: this.config.fusionWeights });
     this.geometricFilter = new GeometricGraphFilter(this.config.ransac);
     this.transformEstimator = new AdaptiveTransformEstimator();
@@ -98,7 +107,38 @@ export class LunaMatchPipeline {
       uniformity: 0,
       uncertainty: 0,
       total: 0,
+      textureRouting: 0,
     };
+
+    // Stage 0 (Part 25): multi-band inputs (IIRS cubes) are reduced to a single validated
+    // structural PCA component. The downstream stages assume one channel.
+    sourceImage = this.embedMultiband(sourceImage, warnings);
+    referenceImage = this.embedMultiband(referenceImage, warnings);
+
+    // Stage 0b (Part 26): PSR mask. Dark tiles are found on the raw (pre-stretch) intensities.
+    let psrStats: DiagnosticInfo['psrStats'];
+    let srcPsr: PSRMask | undefined;
+    let refPsr: PSRMask | undefined;
+    let sunDiversity = 0;
+    if (this.config.psr.enabled) {
+      srcPsr = PSRDetector.classify(sourceImage, this.config.psr);
+      refPsr = PSRDetector.classify(referenceImage, this.config.psr);
+      sunDiversity = PSRDetector.sunDiversityDeg(sourceImage, referenceImage);
+      psrStats = {
+        flag: srcPsr.darkCount > 0 ? PSR_FLAG : 'NONE',
+        sourceDarkTiles: srcPsr.darkCount,
+        referenceDarkTiles: refPsr.darkCount,
+        sourceDarkFraction: srcPsr.darkFraction,
+        matchesRejected: 0,
+        confirmedByIlluminationDiversity: sunDiversity >= this.config.psr.minSunDiversityDeg,
+      };
+      if (srcPsr.darkFraction >= this.config.psr.outOfScopeDarkFraction) {
+        warnings.push(`${PSR_FLAG}: ${(srcPsr.darkFraction * 100).toFixed(0)}% of source tiles are permanently shadowed; nothing to register.`);
+        const empty: MatchSet = { matches: [], sourceImageId: sourceImage.id, targetImageId: referenceImage.id, coordinateConvention: 'x=column, y=row' };
+        const early = { ...timing, total: performance.now() - startTime };
+        return this.createFailureResult(PSR_FLAG, sourceImage.sensorId, referenceImage.sensorId, empty, empty, warnings, early, undefined, psrStats);
+      }
+    }
 
     // Stage 1: Radiometric Preprocessing (Part 04)
     const t0 = performance.now();
@@ -126,30 +166,48 @@ export class LunaMatchPipeline {
       [0, 0, 1],
     ];
 
+    const emptyMatchSet = (): MatchSet => ({
+      matches: [],
+      sourceImageId: sourceImage.id,
+      targetImageId: referenceImage.id,
+      coordinateConvention: 'x=column, y=row',
+    });
+    const matchersUsed: string[] = [];
+    const matchersSkipped: Array<{ name: string; reason: string }> = [];
+    const unavailableExperts: Array<'loftr' | 'rift' | 'lightglue'> = [];
+    // A matcher that cannot run (model file missing, WASM init failure, ...) must degrade the run, not crash it.
+    const tryMatcher = async (
+      name: string,
+      family: 'loftr' | 'rift' | 'lightglue',
+      run: () => Promise<MatchSet> | MatchSet
+    ): Promise<MatchSet> => {
+      try {
+        const ms = await run();
+        matchersUsed.push(name);
+        return ms;
+      } catch (err: any) {
+        const reason = err?.message || String(err);
+        matchersSkipped.push({ name, reason });
+        unavailableExperts.push(family);
+        warnings.push(`${name} matcher unavailable: ${reason}`);
+        return emptyMatchSet();
+      }
+    };
+    const matcherOptions = { groundTruthTransform: gtMatrix };
+
     let rawMatchSet: MatchSet;
     let fusedMatchSet: MatchSet;
 
     if (matcherChoice === 'fusion') {
-      const matchSetLoFTR = await this.loftrMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
-      const matchSetRIFT = await this.riftMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
-      let matchSetLG: MatchSet;
-      try {
-        matchSetLG = await this.lightglueMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
-      } catch (err: any) {
-        warnings.push(`LightGlue matcher skipped: ${err.message}`);
-        matchSetLG = {
-          matches: [],
-          sourceImageId: sourceImage.id,
-          targetImageId: referenceImage.id,
-          coordinateConvention: 'x=column, y=row',
-        };
-      }
+      const matchSetLoFTR = await tryMatcher('LoFTR', 'loftr', () => this.loftrMatcher.match(invSource, invRef, matcherOptions));
+      const matchSetRIFT = await tryMatcher('RIFT', 'rift', () => this.riftMatcher.match(invSource, invRef, matcherOptions));
+      const matchSetLG = await tryMatcher('LightGlue', 'lightglue', () => this.lightglueMatcher.match(invSource, invRef, matcherOptions));
 
       timing.matching = performance.now() - t3;
 
-      // Stage 5: Matcher Fusion (Part 13)
+      // Stage 5: Matcher Fusion (Part 13 / 28)
       const t4 = performance.now();
-      fusedMatchSet = this.fusionEngine.fuse([matchSetLoFTR, matchSetRIFT, matchSetLG], this.geometryProvider);
+      fusedMatchSet = this.fusionEngine.fuse([matchSetLoFTR, matchSetRIFT, matchSetLG], this.geometryProvider, { unavailableExperts });
       rawMatchSet = {
         matches: [...matchSetLoFTR.matches, ...matchSetRIFT.matches, ...matchSetLG.matches],
         sourceImageId: sourceImage.id,
@@ -157,26 +215,19 @@ export class LunaMatchPipeline {
         coordinateConvention: 'x=column, y=row',
       };
       timing.fusion = performance.now() - t4;
+      if (matchersUsed.length > 0 && matchersSkipped.length > 0) {
+        warnings.push(`Fusion is running on ${matchersUsed.join(' + ')} only; fusion weights were redistributed over the available experts.`);
+      }
     } else if (matcherChoice === 'loftr') {
-      rawMatchSet = await this.loftrMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      rawMatchSet = await tryMatcher('LoFTR', 'loftr', () => this.loftrMatcher.match(invSource, invRef, matcherOptions));
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
     } else if (matcherChoice === 'rift') {
-      rawMatchSet = await this.riftMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
+      rawMatchSet = await tryMatcher('RIFT', 'rift', () => this.riftMatcher.match(invSource, invRef, matcherOptions));
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
     } else if (matcherChoice === 'lightglue') {
-      try {
-        rawMatchSet = await this.lightglueMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix });
-      } catch (err: any) {
-        warnings.push(`LightGlue error: ${err.message}`);
-        rawMatchSet = {
-          matches: [],
-          sourceImageId: sourceImage.id,
-          targetImageId: referenceImage.id,
-          coordinateConvention: 'x=column, y=row',
-        };
-      }
+      rawMatchSet = await tryMatcher('LightGlue', 'lightglue', () => this.lightglueMatcher.match(invSource, invRef, matcherOptions));
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
     } else {
@@ -184,8 +235,82 @@ export class LunaMatchPipeline {
       const mMode = overrideOptions?.mockMode || this.config.mockMode || 'low_noise';
       this.mockMatcher = new MockMatcher({ mode: mMode });
       rawMatchSet = await this.mockMatcher.match(invSource, invRef, { groundTruthTransform: gtMatrix, mode: mMode });
+      matchersUsed.push('Mock');
       fusedMatchSet = rawMatchSet;
       timing.matching = performance.now() - t3;
+    }
+
+    const matchersInfo: DiagnosticInfo['matchers'] = { used: matchersUsed, skipped: matchersSkipped };
+    if (matchersUsed.length === 0) {
+      timing.total = performance.now() - startTime;
+      return this.createFailureResult(
+        'MATCHER_UNAVAILABLE',
+        sourceImage.sensorId,
+        referenceImage.sensorId,
+        emptyMatchSet(),
+        emptyMatchSet(),
+        warnings,
+        timing,
+        undefined,
+        psrStats,
+        matchersInfo
+      );
+    }
+
+    // Stage 4b: Texture-Routed Dual-Mode Matching - Area Correlation Fallback (Part 23)
+    // Neural matchers starve on smooth, low-texture terrain (mare/regolith). Tiles the
+    // texture router classifies 'low_texture' are matched with NCC area correlation
+    // instead, and any hits are folded into the raw/fused sets before geometric filtering.
+    let textureRoutingStats: DiagnosticInfo['textureRoutingStats'];
+    if (this.config.textureRouting.enabled) {
+      const tTex = performance.now();
+      const routing = this.areaCorrelationMatcher.classify(invSource);
+      if (srcPsr) {
+        for (const t of routing.tiles) {
+          if (t.mode === 'low_texture' && PSRDetector.isDarkAt(srcPsr, { x: t.centerX, y: t.centerY })) {
+            t.mode = 'psr_skipped';
+            routing.lowTextureCount--;
+          }
+        }
+      }
+      const areaMatchSet = this.areaCorrelationMatcher.match(invSource, invRef, {
+        groundTruthTransform: gtMatrix,
+        tiles: routing,
+      });
+
+      textureRoutingStats = {
+        tileSize: routing.tileSize,
+        totalTiles: routing.tiles.length,
+        featureRichTiles: routing.featureRichCount,
+        lowTextureTiles: routing.lowTextureCount,
+        areaCorrelationMatches: areaMatchSet.matches.length,
+      };
+
+      if (areaMatchSet.matches.length > 0) {
+        rawMatchSet = { ...rawMatchSet, matches: [...rawMatchSet.matches, ...areaMatchSet.matches] };
+        fusedMatchSet = { ...fusedMatchSet, matches: [...fusedMatchSet.matches, ...areaMatchSet.matches] };
+      }
+      if (routing.lowTextureCount > 0 && areaMatchSet.matches.length === 0) {
+        warnings.push(
+          `Texture routing found ${routing.lowTextureCount}/${routing.tiles.length} low-texture tiles but area ` +
+            `correlation produced no matches above the confidence floor (min NCC ${this.config.textureRouting.minCorrelation}).`
+        );
+      }
+      timing.textureRouting = performance.now() - tTex;
+    }
+
+    // Stage 4c (Part 26): drop correspondences that sit in permanently shadowed tiles.
+    if (srcPsr && refPsr && psrStats) {
+      const split = PSRDetector.filterMatches(fusedMatchSet.matches, srcPsr, refPsr, sunDiversity, this.config.psr);
+      if (split.rejected.length > 0) {
+        fusedMatchSet = { ...fusedMatchSet, matches: split.kept };
+        rawMatchSet = { ...rawMatchSet, matches: PSRDetector.filterMatches(rawMatchSet.matches, srcPsr, refPsr, sunDiversity, this.config.psr).kept };
+        psrStats.matchesRejected = split.rejected.length;
+        warnings.push(
+          `${PSR_FLAG}: ${split.rejected.length} match(es) in permanently shadowed tiles were skipped` +
+            (split.confirmedByDiversity ? ' (dark in both images under differing sun azimuth).' : ' (sun azimuths too similar to separate PSR from cast shadow; dark source tile used).')
+        );
+      }
     }
 
     // Failure Guard: Insufficient raw matches
@@ -198,7 +323,10 @@ export class LunaMatchPipeline {
         rawMatchSet,
         fusedMatchSet,
         warnings,
-        timing
+        timing,
+        textureRoutingStats,
+        psrStats,
+        matchersInfo
       );
     }
 
@@ -218,7 +346,10 @@ export class LunaMatchPipeline {
         rawMatchSet,
         fusedMatchSet,
         warnings,
-        timing
+        timing,
+        textureRoutingStats,
+        psrStats,
+        matchersInfo
       );
     }
 
@@ -227,7 +358,12 @@ export class LunaMatchPipeline {
     const transformModel = this.transformEstimator.estimateTransform(
       filteredMatchSet,
       [sourceImage.width, sourceImage.height],
-      [referenceImage.width, referenceImage.height]
+      [referenceImage.width, referenceImage.height],
+      // Stage 7b (Part 24): OHRC / TMC-2 / IIRS are all pushbroom sensors, so offer the
+      // along-track segmented model as one more BIC candidate alongside global models.
+      this.config.pushbroom.enabled && PUSHBROOM_SENSORS.includes(sourceImage.sensorId)
+        ? { pushbroom: this.config.pushbroom }
+        : undefined
     );
     timing.transform = performance.now() - t6;
 
@@ -261,10 +397,41 @@ export class LunaMatchPipeline {
     );
     timing.uniformity = performance.now() - t9;
 
+    // Stage 10b (Part 27): explicit uniformity policy. Hunt for correspondences in empty grid cells and
+    // accept lower-confidence evidence only above strict floors, verified against (never refitting) the transform.
+    let finalMatchSet = uniformMatchSet;
+    let uniformityStats: DiagnosticInfo['uniformityStats'];
+    {
+      const gf = this.config.uniformity.gapFill;
+      const pool = [
+        ...filteredMatchSet.matches.filter((m) => m.isInlier === false),
+        ...fusedMatchSet.matches,
+        ...rawMatchSet.matches,
+      ];
+      const filled = UniformityGapFiller.fill(uniformMatchSet.matches, pool, transformModel, invSource, invRef, {
+        ...gf,
+        gridDimension: this.config.uniformity.gridDimension,
+      });
+      uniformityStats = filled.stats;
+      if (filled.added.length > 0) {
+        finalMatchSet = { ...uniformMatchSet, matches: filled.accepted };
+        warnings.push(
+          `Coverage gap-fill: ${(filled.stats.coverageBefore * 100).toFixed(0)}% \u2192 ${(filled.stats.coverageAfter * 100).toFixed(0)}% ` +
+            `(${filled.stats.cellsFilledFromPool} from dropped matches >= conf ${gf.confidenceFloor}, ${filled.stats.cellsFilledByProbe} from NCC probes >= ${gf.nccFloor}).`
+        );
+      }
+    }
+
+    const finalUniformityScore = this.uniformitySelector.calculateUniformityScore(
+      finalMatchSet,
+      sourceImage.width,
+      sourceImage.height
+    );
+
     // Stage 11: Uncertainty Estimation (Part 19)
     const t10 = performance.now();
     const uncertaintyResult = UncertaintyEstimator.estimateUncertainties(
-      uniformMatchSet,
+      finalMatchSet,
       transformModel,
       sourceImage.width,
       sourceImage.height
@@ -274,7 +441,8 @@ export class LunaMatchPipeline {
     timing.total = performance.now() - startTime;
 
     // Stage 12: Evaluation Metrics (Part 20)
-    const inlierMatches = uniformMatchSet.matches.filter((m) => m.isInlier !== false);
+    // Accuracy metrics exclude coverage-filled matches: they were accepted for coverage, not for accuracy.
+    const inlierMatches = finalMatchSet.matches.filter((m) => m.isInlier !== false && !m.acceptedForCoverage);
     const srcPoints = inlierMatches.map((m) => m.sourcePoint);
     const tgtPoints = inlierMatches.map((m) => m.targetPoint);
 
@@ -294,15 +462,31 @@ export class LunaMatchPipeline {
           percentile95ErrorPx: Number((transformModel.residual.rmse * 1.96).toFixed(3)),
           inlierCount: filterResult.inlierCount,
           inlierRatio: Number(filterResult.inlierRatio.toFixed(3)),
-          uniformityScore: Number(uniformityScore.toFixed(3)),
+          uniformityScore: Number(finalUniformityScore.toFixed(3)),
           runtimeMs: Number(timing.total.toFixed(1)),
         };
 
+    // Stage 12b (Part 29): run-time confidence, independent of any ground truth.
+    const quality = assessRegistrationQuality({
+      inlierCount: filterResult.inlierCount,
+      inlierRatio: filterResult.inlierRatio,
+      residualRmsePx: transformModel.residual.rmse,
+      coverage: uniformityStats?.coverageAfter ?? finalUniformityScore,
+    });
+    if (quality.level !== 'high') {
+      warnings.push(`Registration confidence ${quality.level.toUpperCase()}: ${quality.reasons.join('; ')}.`);
+    }
+
     const diagnostics: DiagnosticInfo = {
+      quality,
       matcherAgreement: matcherChoice === 'fusion' ? 0.88 : 0.75,
       geometryConsistency: 0.94,
       uncertaintyMeanPx: Number(uncertaintyResult.meanUncertaintyPx.toFixed(3)),
       timingBreakdownMs: timing,
+      textureRoutingStats,
+      psrStats,
+      uniformityStats,
+      matchers: matchersInfo,
       warnings,
     };
 
@@ -315,11 +499,28 @@ export class LunaMatchPipeline {
       fusedMatches: fusedMatchSet,
       filteredMatches: filteredMatchSet,
       refinedMatches: refinedMatchSet,
-      uniformMatches: uniformMatchSet,
+      uniformMatches: finalMatchSet,
       registeredImage,
       metrics,
       diagnostics,
     };
+  }
+
+  private embedMultiband(image: ImageData, warnings: string[]): ImageData {
+    if (image.channels <= 1) return image;
+    const { image: embedded, pca, chosenComponent, validated } = IIRSPCAEmbedding.toStructuralImage(
+      image.pixels,
+      image,
+      image.channels,
+      this.config.iirsPca
+    );
+    const c = pca.info[chosenComponent];
+    warnings.push(
+      `${image.sensorId} ${image.channels}-band input reduced via PCA component ${chosenComponent + 1} ` +
+        `(${(c.explainedVarianceRatio * 100).toFixed(1)}% variance, spatial autocorrelation ${c.spatialAutocorrelation.toFixed(2)})` +
+        (validated ? '.' : '; no component passed structure validation, using the most spatially coherent one.')
+    );
+    return embedded;
   }
 
   private createFailureResult(
@@ -329,7 +530,10 @@ export class LunaMatchPipeline {
     rawMatches: MatchSet,
     fusedMatches: MatchSet,
     warnings: string[],
-    timing: any
+    timing: any,
+    textureRoutingStats?: DiagnosticInfo['textureRoutingStats'],
+    psrStats?: DiagnosticInfo['psrStats'],
+    matchers?: DiagnosticInfo['matchers']
   ): RegistrationResult {
     return {
       status: 'failure',
@@ -367,6 +571,9 @@ export class LunaMatchPipeline {
         geometryConsistency: 0,
         uncertaintyMeanPx: 99.0,
         timingBreakdownMs: timing,
+        textureRoutingStats,
+        psrStats,
+        matchers,
         warnings: [...warnings, `Pipeline halted: ${reason}`],
       },
     };
