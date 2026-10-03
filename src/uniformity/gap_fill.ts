@@ -18,6 +18,7 @@
 
 import { ImageData, Match, Point2D, TransformModel } from '../types';
 import { applyTransformModel } from '../registration/transform_utils';
+import { numericJacobian } from '../uncertainty/covariance';
 import { AreaCorrelationMatcher } from '../matching/area_correlation_matcher';
 
 export interface GapFillOptions {
@@ -111,7 +112,11 @@ export class UniformityGapFiller {
       const cx = (cell % dim) * cw + cw / 2;
       const cy = Math.floor(cell / dim) * ch + ch / 2;
       const predicted = applyTransformModel(transform, { x: cx, y: cy });
-      const probe = matcher.probe(source, target, { x: cx, y: cy }, predicted);
+      // Geometrically correct the probed patch via the fitted transform's local Jacobian - without this,
+      // plain axis-aligned NCC only handles translation and is defeated by the scale/rotation that's normal
+      // between Chandrayaan-2 sensors (see area_correlation_matcher.ts for the full explanation).
+      const J = numericJacobian((p) => applyTransformModel(transform, p), { x: cx, y: cy });
+      const probe = matcher.probe(source, target, { x: cx, y: cy }, predicted, J);
       if (!probe || probe.score < options.nccFloor) continue;
       const shift = Math.hypot(probe.point.x - predicted.x, probe.point.y - predicted.y);
       if (shift > options.maxShiftPx) continue;

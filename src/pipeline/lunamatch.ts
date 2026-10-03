@@ -273,7 +273,13 @@ export class LunaMatchPipeline {
           }
         }
       }
-      const areaMatchSet = this.areaCorrelationMatcher.match(invSource, invRef, {
+      // Classification uses the illumination-invariant structural map (above) - well suited to telling
+      // genuine flat terrain from texture regardless of sun angle. The actual NCC correlation below
+      // deliberately uses the RADIOMETRIC-CLEAN images instead: measured empirically, the invariant map's
+      // local-contrast normalization (tuned for the edge/keypoint-oriented neural matchers) distorts the
+      // low-amplitude signal area correlation depends on, while NCC's own per-patch mean/std normalization
+      // already gives it the illumination tolerance it needs for small-to-moderate sun-angle deltas.
+      const areaMatchSet = this.areaCorrelationMatcher.match(cleanSource, cleanRef, {
         groundTruthTransform: gtMatrix,
         tiles: routing,
       });
@@ -408,7 +414,9 @@ export class LunaMatchPipeline {
         ...fusedMatchSet.matches,
         ...rawMatchSet.matches,
       ];
-      const filled = UniformityGapFiller.fill(uniformMatchSet.matches, pool, transformModel, invSource, invRef, {
+      // Same reasoning as the Part 23 area-correlation stage above: probe on the radiometric-clean images,
+      // not the illumination-invariant structural map, since that is where NCC actually finds signal.
+      const filled = UniformityGapFiller.fill(uniformMatchSet.matches, pool, transformModel, cleanSource, cleanRef, {
         ...gf,
         gridDimension: this.config.uniformity.gridDimension,
       });

@@ -973,6 +973,38 @@ export async function runAllLunaMatchUnitTests(): Promise<TestCaseResult[]> {
     results.push({ partName: 'PART 23: Texture Routing', testName: 'Pipeline integration', passed: false, message: err.message });
   }
 
+  try {
+    // The default scenario (180deg sun delta) is a deliberate stress test and legitimately produces zero
+    // area-correlation matches (near-opposite illumination defeats it, as it would any area correlator).
+    // At a REALISTIC sun delta (~25-30deg, like the app's "Shackleton Rim" preset) the same pipeline must
+    // actually produce matches and measurably improve grid coverage - this is the end-to-end proof that the
+    // albedo-map + Jacobian-rectified-NCC fix (see generator/synthetic.ts, matching/area_correlation_matcher.ts)
+    // genuinely works, not just the isolated unit math above.
+    const ds = generateSyntheticLunarDataset({
+      seed: 42,
+      sourceSensor: 'OHRC',
+      referenceSensor: 'OHRC',
+      sunAzimuthDeg: 45,
+      referenceSunAzimuthDeg: 75, // 30deg delta
+      scale: 1.1,
+      rotationDeg: 8,
+    });
+    const result = await new LunaMatchPipeline({ matcher: 'mock', mockMode: 'clustered' }).registerImages(ds.sourceImage, ds.referenceImage, ds.groundTruth);
+    const tex = result.diagnostics.textureRoutingStats;
+    const uni = result.diagnostics.uniformityStats;
+    const passed = !!tex && tex.areaCorrelationMatches > 0 && !!uni && uni.coverageAfter > uni.coverageBefore;
+    results.push({
+      partName: 'PART 23: Texture Routing',
+      testName: 'Realistic sun-angle delta (30deg) actually produces area-correlation matches and improves coverage',
+      passed,
+      message: tex && uni
+        ? `${tex.areaCorrelationMatches} area-correlation matches on ${tex.lowTextureTiles} low-texture tiles; coverage ${(uni.coverageBefore * 100).toFixed(0)}% -> ${(uni.coverageAfter * 100).toFixed(0)}% (${uni.cellsFilledFromPool + uni.cellsFilledByProbe} cells filled).`
+        : 'Missing textureRoutingStats or uniformityStats.',
+    });
+  } catch (err: any) {
+    results.push({ partName: 'PART 23: Texture Routing', testName: 'Realistic sun-angle delta end-to-end', passed: false, message: err.message });
+  }
+
   // --- PART 24: Pushbroom Along-Track Segmentation ---
   {
     const W = 384, H = 384;

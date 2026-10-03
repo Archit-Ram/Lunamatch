@@ -66,6 +66,48 @@ interface LunarCrater {
 }
 
 /**
+ * Generates a smooth, low-frequency ALBEDO variation map (lunar mare/highland-style reflectance contrast),
+ * independent of the topographic DEM - real mare deposits do not track topography either.
+ *
+ * Without this, renderLunarShading() falls back to a spatially-constant albedo (0.85 everywhere), so pixel
+ * intensity in topographically-flat regions comes ENTIRELY from sun-angle-dependent shading. Under the
+ * homomorphic illumination-invariant decomposition (I = L(illumination) * R(reflectance)), removing L via a
+ * low-pass filter should leave R - but with a flat R, there is nothing left to leave: flat terrain produces
+ * no recoverable signal under ANY illumination-invariant representation, by construction. That is a gap in
+ * the generator, not a property of real lunar imagery (mare/highland albedo contrast is a well known,
+ * largely sun-angle-invariant signal real area-correlation matchers rely on in exactly these regions) - and
+ * it is what made the texture-routed area-correlation fallback (Part 23) and the uniformity gap-fill probes
+ * (Part 27) unable to find any real signal on flat tiles even in principle. See generateSyntheticLunarDataset.
+ */
+export function generateAlbedoMap(width: number, height: number, rng: DeterministicRNG): Float32Array {
+  const map = new Float32Array(width * height);
+  // A handful of large, soft mare-like blobs (independent of crater placement) plus a gentle large-scale
+  // gradient, all coarse relative to the DEM's own noise so this reads as a distinct photometric unit
+  // rather than another texture layer.
+  const blobs = Array.from({ length: 3 + Math.floor(rng.next() * 2) }, () => ({
+    cx: rng.range(0, width),
+    cy: rng.range(0, height),
+    r: rng.range(width * 0.18, width * 0.35),
+    depth: rng.range(0.1, 0.22), // darker than surroundings, like basaltic mare
+  }));
+  const gradAngle = rng.range(0, Math.PI * 2);
+  const gradAmp = rng.range(0.02, 0.06);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let a = 0.85;
+      for (const b of blobs) {
+        const d = Math.hypot(x - b.cx, y - b.cy) / b.r;
+        a -= b.depth * Math.exp(-d * d * 1.6); // smooth Gaussian-falloff darkening
+      }
+      a += (x * Math.cos(gradAngle) + y * Math.sin(gradAngle)) * (gradAmp / Math.max(width, height));
+      map[y * width + x] = Math.min(1.0, Math.max(0.35, a));
+    }
+  }
+  return map;
+}
+
+/**
  * Generates 2D procedural lunar heightmap (DEM)
  */
 export function generateLunarDEM(
@@ -402,11 +444,13 @@ export function generateSyntheticLunarDataset(options: SyntheticGenerationOption
     });
   }
 
-  // 2. Generate Heightmap DEM
+  // 2. Generate Heightmap DEM + an independent albedo map (mare/highland-style contrast - see
+  // generateAlbedoMap for why this is needed for area-correlation / gap-fill to have real signal on flat terrain)
   const dem = generateLunarDEM(width, height, rng, craters);
+  const albedoMap = generateAlbedoMap(width, height, rng);
 
   // 3. Render Source Image with Source Sun Angle
-  const sourceRaw = renderLunarShading(dem, width, height, sunAzimuthDeg, sunElevationDeg);
+  const sourceRaw = renderLunarShading(dem, width, height, sunAzimuthDeg, sunElevationDeg, albedoMap);
 
   // Apply sensor-specific characteristics (OHRC: ultra crisp, TMC2: slight blur, IIRS: spectral)
   const sourcePixels = new Float32Array(width * height);
@@ -430,13 +474,14 @@ export function generateSyntheticLunarDataset(options: SyntheticGenerationOption
   );
   const H_inverse = invert3x3(H_forward);
 
-  // 5. Render Reference Image with Reference Sun Angle & Warped Geometry
+  // 5. Render Reference Image with Reference Sun Angle & Warped Geometry (same albedoMap as the source render)
   const refShaded = renderLunarShading(
     dem,
     width,
     height,
     referenceSunAzimuthDeg,
-    referenceSunElevationDeg
+    referenceSunElevationDeg,
+    albedoMap
   );
 
   const refPixels = new Float32Array(width * height);

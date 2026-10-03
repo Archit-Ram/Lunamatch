@@ -29,6 +29,14 @@ export class IlluminationInvariantNormalizer implements IlluminationNormalizer {
     };
   }
 
+  /**
+   * Full illumination-invariant structural map: homomorphic log-domain illumination removal, local-contrast
+   * normalization, then a structural-moments (phase-congruency-like) bandpass. Used for the neural matchers
+   * (LoFTR/RIFT/LightGlue) and for texture-routing classification, where emphasizing edge/keypoint structure
+   * over raw photometry is exactly what's wanted. Area correlation (Part 23) deliberately does NOT use this
+   * representation for its actual NCC correlation (only for tile classification) - see the comment at its
+   * call site in pipeline/lunamatch.ts for why.
+   */
   extractInvariantRepresentation(image: ImageData): ImageData {
     const { width, height, pixels, mask } = image;
     const totalPixels = width * height;

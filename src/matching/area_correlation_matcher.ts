@@ -12,6 +12,7 @@
 import { ImageData, Match, MatchSet, Point2D } from '../types';
 import { Matcher } from '../core/interfaces';
 import { applyHomographyToPoint } from '../generator/synthetic';
+import { numericJacobian } from '../uncertainty/covariance';
 import { TextureRouter, TextureRoutingOptions, TextureRoutingResult } from './texture_router';
 
 export interface AreaCorrelationOptions extends TextureRoutingOptions {
@@ -44,7 +45,12 @@ export class AreaCorrelationMatcher implements Matcher {
    * Matches only within tiles TextureRouter classifies as low-texture.
    * `runtimeOptions.groundTruthTransform`, when supplied, seeds the search
    * window center via a homography prior (same convention as the other
-   * matchers) instead of assuming source/target are roughly co-located.
+   * matchers) instead of assuming source/target are roughly co-located -
+   * and ALSO geometrically corrects the template patch via that prior's
+   * local Jacobian (see `extractWarpedPatch`): plain axis-aligned NCC only
+   * handles translation, and Chandrayaan-2 cross-sensor pairs routinely
+   * carry meaningful scale/rotation that would otherwise defeat it even
+   * where real, stable (e.g. albedo) signal exists.
    * `runtimeOptions.tiles`, when supplied, reuses a TextureRoutingResult the
    * caller already computed instead of re-segmenting the source image.
    */
@@ -63,8 +69,9 @@ export class AreaCorrelationMatcher implements Matcher {
       const priorCenter = priorH
         ? applyHomographyToPoint(priorH, center)
         : { x: center.x * (target.width / source.width), y: center.y * (target.height / source.height) };
+      const J = priorH ? numericJacobian((p) => applyHomographyToPoint(priorH, p), center) : undefined;
 
-      const best = this.searchBestOffset(source, target, center, priorCenter);
+      const best = this.searchBestOffset(source, target, center, priorCenter, J);
       if (best && best.score >= this.options.minCorrelation) {
         matches.push({
           id: `area_corr_${idCounter++}`,
@@ -93,14 +100,18 @@ export class AreaCorrelationMatcher implements Matcher {
   /**
    * Single NCC probe: correlates the patch around `templateCenter` (source) against a window in `target`
    * centered on `searchCenter`. Returns null if the patch or every candidate falls outside the image.
+   * `localJacobian`, when supplied, geometrically corrects the template patch before correlating - pass the
+   * local Jacobian of whatever source->target transform predicted `searchCenter` (e.g. via `numericJacobian`
+   * in uncertainty/covariance.ts) so scale/rotation between the two images doesn't defeat plain NCC.
    */
   probe(
     source: ImageData,
     target: ImageData,
     templateCenter: Point2D,
-    searchCenter: Point2D
+    searchCenter: Point2D,
+    localJacobian?: number[][]
   ): { point: Point2D; score: number } | null {
-    return this.searchBestOffset(source, target, templateCenter, searchCenter);
+    return this.searchBestOffset(source, target, templateCenter, searchCenter, localJacobian);
   }
 
   /** Runs the texture classification without matching - used by the pipeline for diagnostics and to share work with `match`. */
@@ -112,10 +123,19 @@ export class AreaCorrelationMatcher implements Matcher {
     source: ImageData,
     target: ImageData,
     templateCenter: Point2D,
-    searchCenter: Point2D
+    searchCenter: Point2D,
+    localJacobian?: number[][]
   ): { point: Point2D; score: number } | null {
     const r = this.options.patchRadius;
-    const template = this.extractPatch(source, templateCenter, r);
+    // extractWarpedPatch samples the SOURCE at center + J·(dx,dy) for each OUTPUT offset (dx,dy), where
+    // (dx,dy) is meant to range over the TARGET's axis-aligned offsets (so the result lines up with an
+    // axis-aligned candidate patch from the target). That means J here must map TARGET offsets back to
+    // SOURCE offsets - i.e. the INVERSE of localJacobian, which is source->target.
+    const invJ = localJacobian ? AreaCorrelationMatcher.invert2x2(localJacobian) : undefined;
+    const template =
+      invJ && !AreaCorrelationMatcher.isNearIdentity(invJ)
+        ? this.extractWarpedPatch(source, templateCenter, r, invJ)
+        : this.extractPatch(source, templateCenter, r);
     if (!template) return null;
 
     let bestScore = -Infinity;
@@ -159,6 +179,59 @@ export class AreaCorrelationMatcher implements Matcher {
       }
     }
     return patch;
+  }
+
+  private static invert2x2(J: number[][]): number[][] {
+    const [[a, b], [c, d]] = J;
+    const det = a * d - b * c;
+    if (Math.abs(det) < 1e-9) return [[1, 0], [0, 1]];
+    return [[d / det, -b / det], [-c / det, a / det]];
+  }
+
+  private static isNearIdentity(J: number[][], tol = 0.02): boolean {
+    return Math.abs(J[0][0] - 1) < tol && Math.abs(J[1][1] - 1) < tol && Math.abs(J[0][1]) < tol && Math.abs(J[1][0]) < tol;
+  }
+
+  /**
+   * Like `extractPatch`, but samples each offset (dx, dy) from `center` through the 2x2 linear map `J`
+   * first (J·[dx,dy], bilinear-interpolated), so the resulting patch reflects the LOCAL scale/rotation the
+   * source->target transform predicts at this point rather than an axis-aligned square. Returns null if the
+   * warped footprint falls outside the image (checked at the patch corners, a safe superset of the exact
+   * footprint for any rotation).
+   */
+  private extractWarpedPatch(image: ImageData, center: Point2D, radius: number, J: number[][]): Float32Array | null {
+    const size = 2 * radius + 1;
+    const corners = [
+      [-radius, -radius], [radius, -radius], [-radius, radius], [radius, radius],
+    ].map(([dx, dy]) => ({ x: center.x + J[0][0] * dx + J[0][1] * dy, y: center.y + J[1][0] * dx + J[1][1] * dy }));
+    for (const c of corners) {
+      if (c.x < 0 || c.y < 0 || c.x >= image.width - 1 || c.y >= image.height - 1) return null;
+    }
+
+    const patch = new Float32Array(size * size);
+    let i = 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const sx = center.x + J[0][0] * dx + J[0][1] * dy;
+        const sy = center.y + J[1][0] * dx + J[1][1] * dy;
+        patch[i++] = AreaCorrelationMatcher.bilinear(image, sx, sy);
+      }
+    }
+    return patch;
+  }
+
+  private static bilinear(image: ImageData, x: number, y: number): number {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const x1 = Math.min(image.width - 1, x0 + 1);
+    const y1 = Math.min(image.height - 1, y0 + 1);
+    const fx = x - x0;
+    const fy = y - y0;
+    const p00 = image.pixels[y0 * image.width + x0];
+    const p10 = image.pixels[y0 * image.width + x1];
+    const p01 = image.pixels[y1 * image.width + x0];
+    const p11 = image.pixels[y1 * image.width + x1];
+    return p00 * (1 - fx) * (1 - fy) + p10 * fx * (1 - fy) + p01 * (1 - fx) * fy + p11 * fx * fy;
   }
 
   /** Standard NCC in [-1, 1]; 1.0 = perfect linear match. */
