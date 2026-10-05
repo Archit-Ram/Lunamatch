@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/ONNX_Runtime-Web-green?style=for-the-badge" alt="ONNX"/>
 </p>
 
-# 🌙 LunaMatch — Multi-Modal Lunar Image Correspondence Engine
+# LunaMatch — Multi-Modal Lunar Image Correspondence Engine
 
 > **SIH 2026 Problem Statement SIH26166**  
 > Multi-Modal, Sun Angle & Scale Invariant Lunar Image Correspondence Engine for ISRO Chandrayaan-2 Optical Payloads (OHRC • TMC-2 • IIRS)
@@ -14,7 +14,7 @@ LunaMatch is a **fully in-browser** image registration pipeline that aligns luna
 
 ---
 
-## 🎯 Key Features
+## Key Features
 
 | Feature | Description |
 |---|---|
@@ -27,7 +27,7 @@ LunaMatch is a **fully in-browser** image registration pipeline that aligns luna
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -48,7 +48,7 @@ LunaMatch is a **fully in-browser** image registration pipeline that aligns luna
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - **Node.js** ≥ 18
@@ -86,7 +86,7 @@ Open **http://localhost:5173** in Chrome.
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Type check
@@ -101,7 +101,7 @@ npx vite build
 
 ---
 
-## 📡 Real Satellite Data
+## Real Satellite Data
 
 LunaMatch includes **geometry-aligned stereo pairs** from real Chandrayaan-2 TMC-2 data:
 
@@ -123,7 +123,7 @@ These were extracted from ISSDC PDS4 archives using the geometry CSV files to en
 
 ---
 
-## 🔬 The Three Matching Algorithms
+## The Three Matching Algorithms
 
 ### 1. RIFT — Rotation Invariant Feature Transform
 - **Type**: Analytical (no neural network)
@@ -146,7 +146,7 @@ These were extracted from ISSDC PDS4 archives using the geometry CSV files to en
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 src/
@@ -186,7 +186,7 @@ scripts/
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -198,7 +198,7 @@ scripts/
 
 ---
 
-## 📊 Performance
+## Performance
 
 | Matcher | Typical Latency | Match Count | Memory |
 |---|---|---|---|
@@ -211,13 +211,13 @@ scripts/
 
 ---
 
-## 📜 License
+## License
 
 Apache License 2.0
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **ISRO/ISSDC** — Chandrayaan-2 TMC-2 data via [ISSDC PDS4 Archive](https://chmapbrowse.issdc.gov.in/)
 - **Kornia** — LoFTR pretrained weights (Apache 2.0)
@@ -225,7 +225,3 @@ Apache License 2.0
 - **SpatialHub** — [EfficientLoFTR ONNX](https://huggingface.co/SpatialHub/efficient-loftr-onnx)
 
 ---
-
-<p align="center">
-  Built with ❤️ for ISRO Chandrayaan-2 Mission • SIH 2026
-</p>
